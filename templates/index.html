@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Building Code Compliance Check System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        textarea, input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        textarea {
+            height: 150px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+        }
+        .result.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .result.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+        .step-info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏗️ Building Code Compliance Check System</h1>
+        
+        <form id="checkForm" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="regulation">Building Code Text:</label>
+                <textarea id="regulation" name="regulation" placeholder="Please enter the building code text to check..." required></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="ifc_file">IFC File:</label>
+                <input type="file" id="ifc_file" name="ifc_file" accept=".ifc" required>
+            </div>
+            
+            <button type="submit" id="submitBtn">Start Check</button>
+        </form>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <p>🔄 Checking compliance, please wait...</p>
+        </div>
+        
+        <div id="result" class="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('checkForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            loading.style.display = 'block';
+            result.style.display = 'none';
+            
+            try {
+                const formData = new FormData(this);
+                
+                const response = await fetch('/check', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Check failed: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Show result
+                result.className = 'result ' + (data.report.compliance_status === 'pass' ? 'success' : 'error');
+                result.style.display = 'block';
+                
+                let resultHtml = `
+                    <h3>Check Result: ${data.report.compliance_status === 'pass' ? '✅ Passed' : '❌ Failed'}</h3>
+                    <p><strong>Summary:</strong> ${data.report.summary}</p>
+                    <p><strong>Details:</strong> ${data.report.details}</p>
+                    <p><strong>Recommendations:</strong> ${data.report.recommendations}</p>
+                    
+                    <h4>Check Statistics:</h4>
+                    <p>Total Items: ${data.report.check_statistics.total_steps}</p>
+                    <p>Passed Items: ${data.report.check_statistics.passed_steps}</p>
+                    <p>Failed Items: ${data.report.check_statistics.failed_steps}</p>
+                    <p>Success Rate: ${data.report.check_statistics.success_rate}%</p>
+                    
+                    <h4>Detailed Results:</h4>
+                `;
+                
+                data.results.forEach((result_item, index) => {
+                    const stepInfo = result_item.step_info || {};
+                    const status = result_item.result === 'pass' ? '✅' : '❌';
+                    resultHtml += `
+                        <div class="step-info">
+                            <strong>${status} Step ${stepInfo.step_number || index + 1}:</strong> ${stepInfo.task || 'Unknown task'}
+                            <br><small>Tool: ${stepInfo.tool_name || 'Unknown tool'}</small>
+                            <br><small>Status: ${result_item.result}</small>
+                            <br><small>Details: ${result_item.detail}</small>
+                        </div>
+                    `;
+                });
+                
+                result.innerHTML = resultHtml;
+                
+            } catch (error) {
+                result.className = 'result error';
+                result.style.display = 'block';
+                result.innerHTML = `<h3>❌ Check Failed</h3><p>Error: ${error.message}</p>`;
+            } finally {
+                submitBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
