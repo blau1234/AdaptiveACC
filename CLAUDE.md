@@ -56,15 +56,17 @@ UPLOAD_DIR=./uploads
 - **Executor Agent** (`agents/executor.py`): Implements ReAct framework for intelligent tool selection and execution
 - **Checker Agent** (`agents/checker.py`): Evaluates execution results and generates comprehensive compliance reports
 
-**Tool System** (`tools/default_tool_library.py`):
-- Default tool library with structured Tool dataclass
-- Categories: validation, analysis, measurement, compliance, safety
-- Built-in tools: basic_validation, file_analyzer, element_checker, dimension_measurement, accessibility_checker, safety_compliance
+**Tool System** (`tool_library/tool_manager.py`):
+- Dynamic tool loading and management system
+- Tool dataclass with structured categories: validation, analysis, measurement, compliance, safety  
+- Built-in tools: get_elements_by_type, extract_properties, basic_validation, dimension_measurement
+- Tool Creator System (`agents/tool_creator/`): Automated tool generation with RAG, static checking, and testing
 
 **Utilities:**
-- **IFC Parser** (`utils/ifc_parser.py`): Parses IFC files using ifcopenshell, extracts building elements (walls, doors, windows, slabs)
+- **IFC Parser** (`tool_library/ifc_parser.py`): Parses IFC files using ifcopenshell, extracts building elements (walls, doors, windows, slabs)
 - **LLM Client** (`utils/llm_client.py`): Handles OpenAI API communication with retry logic
 - **Validation** (`utils/validation.py`): Input validation and error handling utilities
+- **Vector Database** (`langchain_vectordb/`): LangChain/Chroma vector database for RAG retrieval in tool creation
 
 **Data Models** (`models/`):
 - **API Models** (`api_models.py`): FastAPI request/response models
@@ -83,6 +85,7 @@ UPLOAD_DIR=./uploads
 ### API Endpoints
 
 - `POST /check`: Main compliance check endpoint (regulation text + IFC file upload)
+- `POST /preview-ifc`: IFC file preview endpoint for 3D visualization
 - `GET /health`: System health check with component status
 - `GET /`: Web interface (HTML form)
 
@@ -129,6 +132,16 @@ The system uses message-based communication between agents:
 - Feedback rounds with maximum iteration limits
 - Step-by-step execution with immediate feedback
 
+### Tool Creator System
+
+The automated tool generation system includes:
+- **RAG Retriever**: Uses LangChain/Chroma vector database to find relevant documentation
+- **Code Generator**: LLM-powered code generation with contextual assistance
+- **Static Checker**: Validates generated code syntax and basic structure  
+- **Unit Tester**: Dynamically tests generated functions with example inputs
+- **IFC Generator**: Creates realistic test data for IFC-related tools
+- **Safe Executor**: Isolated execution environment for testing generated code
+
 ### Error Handling
 
 - **Agent Communication**: Structured error messages and fallback mechanisms
@@ -143,33 +156,49 @@ The system uses message-based communication between agents:
 │   ├── coordinator.py    # Main coordination logic
 │   ├── planner.py       # Plan generation and modification
 │   ├── executor.py      # ReAct-based execution engine  
-│   └── checker.py       # Compliance evaluation
-├── tools/           # Tool library system
-│   └── default_tool_library.py  # Built-in tools
+│   ├── checker.py       # Compliance evaluation
+│   └── tool_creator/    # Automated tool generation system
+│       ├── data_models.py      # Tool creation data structures
+│       ├── too_creator.py      # Main code generator agent
+│       ├── rag_retriever.py    # RAG document retrieval
+│       ├── static_checker.py   # Static code analysis
+│       ├── unit_tester.py      # Dynamic testing
+│       └── executor.py         # Safe code execution
+├── tool_library/     # Tool management system
+│   ├── tool_manager.py  # Dynamic tool loading
+│   └── ifc_parser.py    # IFC file processing
 ├── utils/           # Utility modules
-│   ├── ifc_parser.py    # IFC file processing
 │   ├── llm_client.py    # OpenAI API client
 │   └── validation.py    # Input validation
 ├── models/          # Data models
 │   ├── api_models.py    # FastAPI models
 │   ├── agent_models.py  # Agent communication
 │   └── shared_models.py # Common structures
+├── langchain_vectordb/ # Vector database for RAG
 ├── templates/       # Web interface templates
 ├── test_ifc/        # Test IFC files
 ├── test_regulation/ # Test regulation texts
+├── uploads/         # Temporary file storage
 ├── main.py          # FastAPI application
 ├── config.py        # Configuration management
-└── test_system.py   # System tests
+└── test.py          # Development testing
 ```
 
 ## Development Guidelines
 
 ### Adding New Tools
 
-1. Define tool function with standard signature in `tools/default_tool_library.py`
+**Manual Method:**
+1. Define tool function with standard signature in `tool_library/tool_manager.py` 
 2. Create Tool dataclass with proper category and parameter schema
-3. Add to `create_default_tool_library()` function
+3. Add to `_load_basic_tools()` method in ToolManager
 4. Test tool functionality independently
+
+**Automated Method (Tool Creator System):**
+1. Define ToolRequirement with description, parameters, and examples
+2. Use CodeGeneratorAgent to generate tool automatically with RAG assistance
+3. System includes static checking, unit testing, and IFC test data generation
+4. Generated tools are validated and can be integrated into the tool library
 
 ### Extending Agents
 
@@ -180,16 +209,24 @@ The system uses message-based communication between agents:
 
 ### IFC Processing
 
-- Always use `utils.ifc_parser.IFCParser` for consistent file handling
-- Extract standard building elements: walls, doors, windows, slabs
+- Always use `tool_library.ifc_parser.IFCParser` for consistent file handling
+- Extract standard building elements: walls, doors, windows, slabs, beams, columns
 - Handle file loading errors gracefully
+- Use `get_elements_by_type()` method for element extraction
+- Use `extract_properties()` method for property information
 
 ### Testing
 
 Run comprehensive tests before changes:
 ```bash
-python test_system.py  # Full system test
-python test_*.py       # Individual component tests
+python test.py          # Development testing with sample data
+python test_system.py   # Full system test (if available)
 ```
 
-The test suite includes mocking for external dependencies and covers all major system components.
+**Testing with sample data:**
+- Place regulation texts in `test_regulation/` directory (1.txt, 2.txt)
+- Use IFC test files from `test_ifc/` directory (AC20.ifc) 
+- Test individual components by importing and running them in `test.py`
+
+**Tool Creator Testing:**
+The system includes automated testing for generated tools with IFC test data generation and validation.
