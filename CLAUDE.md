@@ -56,11 +56,13 @@ UPLOAD_DIR=./uploads
 - **Executor Agent** (`agents/executor.py`): Implements ReAct framework for intelligent tool selection and execution
 - **Checker Agent** (`agents/checker.py`): Evaluates execution results and generates comprehensive compliance reports
 
-**Tool System** (`tool_library/tool_manager.py`):
-- Dynamic tool loading and management system
-- Tool dataclass with structured categories: validation, analysis, measurement, compliance, safety  
-- Built-in tools: get_elements_by_type, extract_properties, basic_validation, dimension_measurement
-- Tool Creator System (`agents/tool_creator/`): Automated tool generation with RAG, static checking, and testing
+**Tool System** (ToolRegistry-based with categorized storage):
+- **Direct ToolRegistry integration** (`tool_library/tool_registry.py`): Uses oaklight/toolregistry for enterprise-grade tool management
+- **Namespace organization**: Tools organized with namespaces (builtin_tools-, ifcopenshelltools-, etc.)
+- **Categorized storage** (`tools/`): Organized by function - builtin/, ifcopenshell/, mcp/, openapi/, langchain/
+- **Built-in tools**: `builtin_tools-get_elements_by_type`, `builtin_tools-extract_properties`
+- **Persistent storage** (`tool_library/persistent_tool_storage.py`): Automatic tool persistence with category-based file organization
+- **Tool Creator System** (`agents/tool_creator/`): Automated tool generation with RAG, static checking, testing, and smart categorization
 
 **Utilities:**
 - **IFC Parser** (`tool_library/ifc_parser.py`): Parses IFC files using ifcopenshell, extracts building elements (walls, doors, windows, slabs)
@@ -188,17 +190,25 @@ The automated tool generation system includes:
 
 ### Adding New Tools
 
-**Manual Method:**
-1. Define tool function with standard signature in `tool_library/tool_manager.py` 
-2. Create Tool dataclass with proper category and parameter schema
-3. Add to `_load_basic_tools()` method in ToolManager
-4. Test tool functionality independently
+**ToolRegistry Integration Method:**
+1. Use `@registry.register` decorator for simple function registration
+2. Or use `registry.register_from_class()` with `with_namespace=True` for organized tool classes
+3. Tools are automatically registered with OpenAI-compatible schemas
+4. Access tools via namespaced names: `builtin_tools-tool_name`
 
 **Automated Method (Tool Creator System):**
 1. Define ToolRequirement with description, parameters, and examples
 2. Use CodeGeneratorAgent to generate tool automatically with RAG assistance
 3. System includes static checking, unit testing, and IFC test data generation
-4. Generated tools are validated and can be integrated into the tool library
+4. **Generated tools are automatically categorized and saved** to appropriate directories (`ifcopenshell/`, `mcp/`, etc.)
+5. **Tools persist across restarts** with automatic namespace assignment
+
+**Tool Categories:**
+- `builtin/`: Core IFC processing tools
+- `ifcopenshell/`: IFC-specific analysis and compliance tools  
+- `mcp/`: Model Context Protocol tools
+- `openapi/`: OpenAPI integration tools
+- `langchain/`: LangChain integration tools
 
 ### Extending Agents
 
@@ -209,11 +219,12 @@ The automated tool generation system includes:
 
 ### IFC Processing
 
-- Always use `tool_library.ifc_parser.IFCParser` for consistent file handling
+- Always use `utils.ifc_parser.IFCParser` for consistent file handling
 - Extract standard building elements: walls, doors, windows, slabs, beams, columns
 - Handle file loading errors gracefully
-- Use `get_elements_by_type()` method for element extraction
-- Use `extract_properties()` method for property information
+- **Access via ToolRegistry**: Use `builtin_tools-get_elements_by_type` for element extraction
+- **Access via ToolRegistry**: Use `builtin_tools-extract_properties` for property information
+- All IFC-related generated tools are automatically saved to `tools/ifcopenshell/` directory
 
 ### Testing
 
@@ -230,3 +241,44 @@ python test_system.py   # Full system test (if available)
 
 **Tool Creator Testing:**
 The system includes automated testing for generated tools with IFC test data generation and validation.
+
+**ToolRegistry Integration Testing:**
+```bash
+python test_complete_toolregistry_integration.py  # Full integration test with categorized storage
+```
+
+## File Organization (Updated)
+
+```
+├── agents/           # Multi-agent system
+│   ├── coordinator.py    # Main coordination logic
+│   ├── planner.py       # Plan generation and modification
+│   ├── executor.py      # ReAct-based execution engine  
+│   ├── checker.py       # Compliance evaluation
+│   └── tool_creator/    # Automated tool generation system
+├── tool_library/     # ToolRegistry-based tool management
+│   ├── tool_registry.py     # Direct ToolRegistry integration
+│   ├── persistent_tool_storage.py  # Categorized tool persistence
+│   └── tool_manager.py     # Legacy (deprecated)
+├── tools/           # Categorized tool storage (NEW)
+│   ├── builtin/         # Core IFC processing tools
+│   ├── ifcopenshell/    # IFC-specific analysis tools
+│   ├── mcp/             # Model Context Protocol tools
+│   ├── openapi/         # OpenAPI integration tools
+│   ├── langchain/       # LangChain integration tools
+│   └── metadata.json   # Global tool metadata
+├── utils/           # Utility modules
+│   ├── ifc_parser.py    # IFC file processing utilities
+│   ├── llm_client.py    # OpenAI API client
+│   └── validation.py    # Input validation
+├── models/          # Data models
+├── langchain_vectordb/ # Vector database for RAG
+├── templates/       # Web interface templates
+├── test_ifc/        # Test IFC files
+├── test_regulation/ # Test regulation texts
+├── uploads/         # Temporary file storage
+├── main.py          # FastAPI application
+└── test_complete_toolregistry_integration.py # Integration tests
+```
+
+- comments should be in English

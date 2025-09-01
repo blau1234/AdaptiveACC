@@ -4,7 +4,9 @@ from typing import Dict, List, Any, Optional, Callable, Tuple
 from dataclasses import dataclass
 import re
 from utils.llm_client import LLMClient
-from tool_library.tool_manager import ToolManager
+from tools.tool_registry import create_building_tool_registry
+from toolregistry import ToolRegistry
+from models.blackboard_models import BlackboardMixin
 
 @dataclass
 class ReActStep:
@@ -14,12 +16,13 @@ class ReActStep:
     action_input: Dict[str, Any]
     should_continue: bool
     
-class Executor:
+class Executor(BlackboardMixin):
    
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client=None, tool_registry=None):
+        super().__init__()
         self.llm_client = llm_client or LLMClient()
         self.execution_history = []
-        self.tool_manager = ToolManager()
+        self.tool_registry = tool_registry or create_building_tool_registry()
         
         # Build ReAct system prompt
         self.system_prompt = self._build_react_system_prompt()
@@ -98,23 +101,41 @@ class Executor:
         """.format(tools_section=tools_section)
     
     def _get_available_tools(self) -> Dict[str, Dict[str, str]]:
-        """Get available tools from tool manager"""
+        """Get available tools from tool registry"""
         tools_info = {}
         
-        for tool_name, tool in self.tool_manager.get_all_tools().items():
-            # 构建参数描述
-            params_desc = []
-            for param_name, param_info in tool.parameters_schema.items():
-                required = "(required)" if param_info.get("required", False) else "(optional)"
-                params_desc.append(f"{param_name} {required}: {param_info.get('description', 'No description')}")
+        # Get all tools schema from ToolRegistry  
+        try:
+            tools_schema = self.tool_registry.get_tools_json(api_format="openai-chatcompletion")
             
-            tools_info[tool_name] = {
-                "description": tool.description,
-                "category": tool.category,
-                "parameters": "; ".join(params_desc) if params_desc else "No parameters required",
-                "usage": f"Use this tool for {tool.category} tasks",
-                "example": f'{{"parameter": "value"}} - {tool.description}'
-            }
+            for tool_schema in tools_schema:
+                if tool_schema.get("type") == "function":
+                    func_info = tool_schema.get("function", {})
+                    tool_name = func_info.get("name", "unknown")
+                    
+                    # Extract parameter descriptions
+                    params_schema = func_info.get("parameters", {})
+                    properties = params_schema.get("properties", {})
+                    required_fields = params_schema.get("required", [])
+                    
+                    params_desc = []
+                    for param_name, param_info in properties.items():
+                        required = "(required)" if param_name in required_fields else "(optional)"
+                        desc = param_info.get("description", param_info.get("title", "No description"))
+                        params_desc.append(f"{param_name} {required}: {desc}")
+                    
+                    tools_info[tool_name] = {
+                        "description": func_info.get("description", "No description available"),
+                        "category": "analysis",  # Default category
+                        "parameters": "; ".join(params_desc) if params_desc else "No parameters required",
+                        "usage": f"Use this tool for building compliance analysis",
+                        "example": f'{{"parameter": "value"}} - {func_info.get("description", "tool")}'
+                    }
+        
+        except Exception as e:
+            print(f"Error getting tools from registry: {e}")
+            # Fallback to empty tools if there's an error
+            tools_info = {}
         
         return tools_info
     
@@ -145,6 +166,12 @@ class Executor:
             "ifc_file_path": ifc_file_path,
             "history": [],
         }
+        
+        # Use blackboard data if available
+        if hasattr(self, '_blackboard') and self._blackboard:
+            context["regulation_text"] = self.get_regulation_text()
+            context["current_plan"] = self.get_current_plan()
+            context["execution_results"] = self.get_execution_results()
         
         # Initial state
         current_state = {
@@ -281,22 +308,32 @@ class Executor:
         selected_tool = action_name
         
         # Check if tool exists
-        if not self.tool_manager.get_tool(selected_tool):
+        if selected_tool not in self.tool_registry.get_available_tools():
             return {
                 "success": False,
                 "error": f"Tool '{selected_tool}' not found in tool library",
                 "tool_name": selected_tool,
-                "available_tools": list(self.tool_manager.get_all_tools().keys()),
+                "available_tools": self.tool_registry.get_available_tools(),
                 "critical_failure": False
             }
         
         # Execute the LLM-selected tool with LLM-provided parameters
         try:
-            result = self.tool_manager.execute_tool(
-                tool_name=selected_tool,
-                ifc_file_path=context["ifc_file_path"],
-                parameters=action_input
-            )
+            # Add ifc_file_path to parameters for tool execution
+            tool_params = action_input.copy()
+            tool_params["ifc_file_path"] = context["ifc_file_path"]
+            
+            # Get the tool function and execute it directly
+            tool_func = self.tool_registry.get_callable(selected_tool)
+            if tool_func is None:
+                return {
+                    "success": False,
+                    "error": f"Tool '{selected_tool}' not found or not callable",
+                    "tool_name": selected_tool,
+                    "critical_failure": True
+                }
+            
+            result = tool_func(**tool_params)
             
             return {
                 "success": True,
@@ -410,17 +447,11 @@ class Executor:
         tools_info = "Available Tools:\n"
         tools_info += "=" * 50 + "\n"
         
-        for tool_name, tool in self.tool_manager.get_all_tools().items():
-            tools_info += f"\n**{tool_name}** ({tool.category})\n"
-            tools_info += f"Description: {tool.description}\n"
-            
-            if tool.parameters_schema:
-                tools_info += "Parameters:\n"
-                for param_name, param_info in tool.parameters_schema.items():
-                    required = "(required)" if param_info.get("required", False) else "(optional)"
-                    tools_info += f"  - {param_name} {required}: {param_info.get('description', 'No description')}\n"
-            else:
-                tools_info += "Parameters: None\n"
+        tools = self._get_available_tools()
+        for tool_name, tool_info in tools.items():
+            tools_info += f"\n**{tool_name}** ({tool_info.get('category', 'analysis')})\n"
+            tools_info += f"Description: {tool_info.get('description', 'No description')}\n"
+            tools_info += f"Parameters: {tool_info.get('parameters', 'None')}\n"
             
             tools_info += "-" * 30 + "\n"
         
@@ -485,6 +516,14 @@ class Executor:
             Dict: Step execution result with step_status field
         """
         print(f"Executor: Executing single step {step_id}: {step.get('description', 'Unknown')}")
+        
+        # Log to blackboard if available
+        if hasattr(self, '_blackboard') and self._blackboard:
+            self.log_communication("coordinator", "step_execution_start", {
+                "step_id": step_id,
+                "step_description": step.get('description', 'Unknown'),
+                "ifc_file_path": ifc_file_path
+            })
         
         try:
             # Execute step using ReAct framework

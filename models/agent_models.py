@@ -5,7 +5,7 @@ Pydantic models for agent communication messages
 from datetime import datetime
 from typing import Dict, Any, Optional, Literal, List
 from pydantic import BaseModel, Field
-from .shared_models import PlanModel, StepModel, ExecutionResultModel, StepExecutionResultModel, ComplianceReportModel
+from .shared_models import PlanModel, StepModel, ExecutionResultModel, StepExecutionResultModel
 
 
 class BaseMessage(BaseModel):
@@ -134,7 +134,7 @@ class ComplianceCheckResponseMessage(BaseMessage):
     payload: Dict[str, Any] = Field(..., description="Response payload")
     
     class Payload(BaseModel):
-        compliance_report: ComplianceReportModel = Field(..., description="Compliance report")
+        compliance_report: Dict[str, Any] = Field(..., description="Compliance report")
         status: Literal["success", "failed"] = Field(..., description="Check status")
     
     def __init__(self, **data):

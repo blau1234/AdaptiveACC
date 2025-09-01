@@ -3,7 +3,7 @@ from agents.planner import Planner
 from agents.coordinator import AgentCoordinator
 from agents.checker import Checker
 from agents.executor import Executor
-from tool_library.ifc_parser import IFCParser
+from utils.ifc_parser import IFCParser
 
 #llm = LLMClient()
 #response = llm.generate_response("Hello, how are you?")
@@ -56,3 +56,43 @@ checker = Checker()
 
 # summary = checker._summarize_results(coordinator_response['execution_results'])
 # print(summary)
+
+#___________________________________________________________________________
+tool_requirement = ToolRequirement(
+    description="Extracts the thickness of a wall from an IFC model given its ID.",
+    function_name="get_wall_thickness",
+    parameters=[
+        {"name": "ifc_file_path", "type": "str", "description": "Path to the IFC file."},
+        {"name": "wall_id", "type": "str", "description": "The unique identifier of the wall in the IFC model."}
+    ],
+    return_type="float",
+    examples=[
+        "get_wall_thickness('example.ifc', 'Wall_123') -> 0.25",
+        "get_wall_thickness('building.ifc', 'Wall_456') -> 0.30"
+    ]
+)
+
+tool_creator = CodeGeneratorAgent()
+# tool_creator.create_tool(tool_requirement)
+
+relevant_docs = tool_creator.rag_retriever.retrieve_relevant_docs(
+                tool_requirement.description, k=5
+            )
+# print("Relevant Documents:")
+# print(relevant_docs)
+
+context = tool_creator._build_context(tool_requirement, relevant_docs)
+# print("Context:")
+# print(context)
+
+code = tool_creator._generate_initial_code(context, tool_requirement)
+# print("Generated Code:")
+# print(code)
+
+static_checker = StaticChecker()
+# static_result = static_checker.check_code(code)
+# print("Static Check Result:")
+# print(static_result)
+
+
+

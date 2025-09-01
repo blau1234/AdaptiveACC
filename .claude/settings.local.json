@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__context7__resolve-library-id"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

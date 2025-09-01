@@ -2,10 +2,12 @@ import json
 from typing import Dict, List, Any
 from datetime import datetime
 from utils.llm_client import LLMClient
+from models.blackboard_models import BlackboardMixin
 
-class Checker:   
+class Checker(BlackboardMixin):   
     
     def __init__(self):
+        super().__init__()
         self.llm_client = LLMClient()
     
     def evaluate_compliance(self, 
@@ -18,7 +20,6 @@ class Checker:
         Return a JSON object with this structure:
         {
             "compliant": true/false,
-            "confidence": 0.0-1.0,
             "summary": "One-line summary of compliance status",
             "violations": [
                 {
@@ -36,12 +37,9 @@ class Checker:
         }
         """
         
-        # Prepare simplified summary of execution results
-        results_summary = self._summarize_results(execution_results)
-        
         prompt = f"""
         Building Regulation: {regulation_text}
-        Execution Results: {json.dumps(results_summary, indent=2)}   
+        Execution Results: {json.dumps(execution_results, indent=2)}   
         {f"Original Plan: {json.dumps(plan, indent=2)}" if plan else "No plan information available"}
         Please evaluate compliance based on these results.
         """
@@ -49,6 +47,14 @@ class Checker:
         try:
             response = self.llm_client.generate_response(prompt, system_prompt)
             evaluation = self._extract_json_from_response(response)
+            
+            # Ensure required fields exist with defaults
+            evaluation.setdefault('compliant', False)
+            # Remove confidence field
+            evaluation.setdefault('summary', 'No summary generated')
+            evaluation.setdefault('violations', [])
+            evaluation.setdefault('passed_checks', [])
+            evaluation.setdefault('recommendations', [])
             
             # Add metadata
             evaluation['timestamp'] = datetime.now().isoformat()
@@ -72,7 +78,6 @@ class Checker:
             # Executive summary - information that decision makers care about most
             "executive_summary": {
                 "status": "COMPLIANT" if evaluation['compliant'] else "NON-COMPLIANT",
-                "confidence": evaluation['confidence'],
                 "summary": evaluation['summary'],
                 "critical_issues": len([v for v in evaluation.get('violations', []) 
                                       if v.get('severity') == 'critical'])
@@ -107,21 +112,6 @@ class Checker:
         
         return report
     
-    def _summarize_results(self, execution_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Simplify execution results into format that LLM can easily understand
-        Remove redundant information, keep key judgment elements
-        """
-        summary = []
-        for i, result in enumerate(execution_results):
-            summary.append({
-                "step": i + 1,
-                "checked": result.get('detail', 'Unknown check'),
-                "result": result.get('result', 'unknown'),
-                "issues": result.get('issues', []),
-                "elements": result.get('elements_checked', [])
-            })
-        return summary
     
     def _extract_json_from_response(self, response: str) -> Dict[str, Any]:
         """
@@ -184,12 +174,34 @@ class Checker:
                         execution_results: List[Dict[str, Any]], 
                         regulation_text: str,
                         plan: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        One-stop method: evaluate and generate report
-        This is the method most users will call
-        """
+       
+        # Log compliance check start to blackboard
+        if hasattr(self, '_blackboard') and self._blackboard:
+            self.log_communication("coordinator", "compliance_check_start", {
+                "execution_results_count": len(execution_results),
+                "regulation_length": len(regulation_text),
+                "has_plan": plan is not None
+            })
+            
+            # Use blackboard data if parameters not provided
+            if not regulation_text and hasattr(self, '_blackboard'):
+                regulation_text = self.get_regulation_text()
+            if not plan and hasattr(self, '_blackboard'):
+                plan = self.get_current_plan()
+            if not execution_results and hasattr(self, '_blackboard'):
+                execution_results = self.get_execution_results()
+        
         evaluation = self.evaluate_compliance(execution_results, regulation_text, plan)
         report = self.generate_report(evaluation, execution_results, regulation_text)
+        
+        # Log completion to blackboard
+        if hasattr(self, '_blackboard') and self._blackboard:
+            self.log_communication("checker", "compliance_check_completed", {
+                "compliant": evaluation.get("compliant", False),
+                "violations_count": len(evaluation.get("violations", [])),
+                "passed_checks_count": len(evaluation.get("passed_checks", []))
+            })
+        
         return report
     
     def export_report(self, report: Dict[str, Any], format: str = "json") -> str:

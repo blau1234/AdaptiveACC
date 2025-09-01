@@ -4,7 +4,7 @@ Pydantic models for API requests and responses
 
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field, validator
-from .shared_models import PlanModel, ExecutionResultModel, ComplianceReportModel
+from .shared_models import PlanModel, ExecutionResultModel
 
 
 class ComplianceCheckRequest(BaseModel):
@@ -35,10 +35,7 @@ class CoordinationInfoModel(BaseModel):
 
 class ComplianceCheckResponse(BaseModel):
     """Model for compliance check API response"""
-    plan: PlanModel = Field(..., description="Final execution plan")
-    results: List[ExecutionResultModel] = Field(..., description="Execution results")
-    report: ComplianceReportModel = Field(..., description="Compliance report")
-    coordination_info: CoordinationInfoModel = Field(..., description="Coordination information")
+    report: Dict[str, Any] = Field(..., description="Compliance report")
 
 
 class HealthCheckResponse(BaseModel):

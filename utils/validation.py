@@ -1,6 +1,3 @@
-"""
-Validation utilities using Pydantic models
-"""
 
 from typing import Dict, Any, List
 from pydantic import ValidationError

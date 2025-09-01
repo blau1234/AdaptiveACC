@@ -3,19 +3,74 @@ from typing import Dict, List, Any
 from agents.planner import Planner
 from agents.executor import Executor
 from agents.checker import Checker
+from agents.tool_creator.tool_creator import ToolCreatorAgent
+from tools.tool_registry import create_building_tool_registry
+from toolregistry import ToolRegistry
 from datetime import datetime
 from utils.validation import validate_regulation_text, validate_plan_structure, safe_validate
+from models.blackboard_models import ComplianceCheckBlackboard, BlackboardMixin
+import uuid
 
-class AgentCoordinator:
+class AgentCoordinator(BlackboardMixin):
     def __init__(self):
+        super().__init__()
+        
+        # Initialize shared ToolRegistry directly
+        self.tool_registry = create_building_tool_registry()
+        
+        # Initialize agents with shared tool registry
         self.planner = Planner()
-        self.executor = Executor()
+        self.executor = Executor(tool_registry=self.tool_registry)
         self.checker = Checker()
+        self.tool_creator = ToolCreatorAgent(tool_registry=self.tool_registry)
+        
         self.communication_log = []
         self.max_feedback_rounds = 3
+        
+        # Initialize blackboard for the session
+        self._init_blackboard()
+    
+    def _init_blackboard(self):
+        """Initialize blackboard and set it for all agents"""
+        blackboard = ComplianceCheckBlackboard()
+        self.set_blackboard(blackboard)
+        
+        # Set blackboard for all agents
+        if hasattr(self.planner, 'set_blackboard'):
+            self.planner.set_blackboard(blackboard)
+        if hasattr(self.executor, 'set_blackboard'):
+            self.executor.set_blackboard(blackboard) 
+        if hasattr(self.checker, 'set_blackboard'):
+            self.checker.set_blackboard(blackboard)
+        if hasattr(self.tool_creator, 'set_blackboard'):
+            self.tool_creator.set_blackboard(blackboard)
+    
+    def set_blackboard_for_tool_creator(self, tool_creator_agent):
+        """Set blackboard for ToolCreator components when needed"""
+        if hasattr(self, '_blackboard') and self._blackboard:
+            if hasattr(tool_creator_agent, 'set_blackboard'):
+                tool_creator_agent.set_blackboard(self._blackboard)
+            
+            # Set blackboard for sub-components
+            if hasattr(tool_creator_agent, 'requirement_agent') and hasattr(tool_creator_agent.requirement_agent, 'set_blackboard'):
+                tool_creator_agent.requirement_agent.set_blackboard(self._blackboard)
+            if hasattr(tool_creator_agent, 'code_generator') and hasattr(tool_creator_agent.code_generator, 'set_blackboard'):
+                tool_creator_agent.code_generator.set_blackboard(self._blackboard)
+    
+    def _setup_session(self, regulation_text: str, ifc_file_path: str):
+        """Setup session data in blackboard"""
+        self.blackboard.session_id = str(uuid.uuid4())[:8]
+        self.blackboard.regulation_text = regulation_text
+        self.blackboard.ifc_file_path = ifc_file_path
+        self.blackboard.max_feedback_rounds = self.max_feedback_rounds
+        print(f"Coordinator: Session {self.blackboard.session_id} initialized")
     
     def execute_compliance_check(self, regulation_text: str, ifc_file_path: str) -> Dict[str, Any]:
         print("Coordinator: Starting compliance check with step-by-step coordination")
+        
+        # Initialize blackboard for this session
+        self._setup_session(regulation_text, ifc_file_path)
+        self.update_phase("validation")
         
         # Validate input
         try:
@@ -26,45 +81,38 @@ class AgentCoordinator:
             raise
         
         # Generate initial plan from Planner
+        self.update_phase("planning")
         current_plan = self._request_initial_plan(validated_regulation)
         
         # Validate plan structure
         current_plan = safe_validate(validate_plan_structure, current_plan, current_plan)
+        self.blackboard.update_plan(current_plan, "initial_plan")
         
-        # Execute plan using the unified execution method
+        # Execute plan 
         print("Coordinator: Starting plan execution...")
+        self.update_phase("execution")
         execution_result = self.execute_plan(current_plan, ifc_file_path, self.max_feedback_rounds)
-        
-        # Extract results from unified execution
         all_execution_results = execution_result.get("execution_results", [])
-        step_execution_history = execution_result.get("step_execution_history", [])
-        execution_status = execution_result.get("execution_status", "unknown")
-        feedback_round = execution_result.get("feedback_rounds_used", 0)
-        current_step_index = execution_result.get("steps_completed", 0)
-        current_plan = execution_result.get("final_plan", current_plan)  # Use the potentially modified plan
-        steps = current_plan.get("steps", [])
         
         # Call Checker
         print("Coordinator: Starting final compliance checking...")
+        self.update_phase("checking")
         final_report = self._request_compliance_check(all_execution_results, regulation_text, current_plan)
         print("Coordinator: Final compliance checking completed")
         
-        # Compile complete results
+        self.update_phase("completed")
+        
+        # Compile complete results with blackboard context
         return {
-            "plan": current_plan,
-            "final_plan": current_plan,  # The potentially modified final plan
-            "execution_results": all_execution_results,
-            "step_execution_history": step_execution_history,
-            "execution_status": execution_status,
-            "feedback_rounds_used": feedback_round,
-            "steps_completed": current_step_index,
-            "total_steps": len(steps),
             "final_report": final_report,
-            "communication_log": self.communication_log.copy(),
-            "planner_history": self.planner.get_conversation_history(),
-            "executor_history": self.executor.get_execution_history()
+            "session_summary": self.blackboard.get_context_summary(),
+            "blackboard_data": {
+                "communication_log": self.blackboard.communication_log,
+                "created_tools": self.blackboard.created_tools,
+                "plan_modifications": self.blackboard.plan_modifications
+            }
         }
-    
+
     def _request_initial_plan(self, regulation_text: str) -> Dict[str, Any]:
         """Request initial plan from Planner"""
         print("Coordinator: Requesting initial plan from Planner")
@@ -80,7 +128,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(request_message)
+        self.blackboard.add_communication("coordinator", "planner", "plan_request", request_message["payload"])
         
         # Call Planner
         plan = self.planner.generate_initial_plan(regulation_text)
@@ -96,7 +144,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(response_message)
+        self.blackboard.add_communication("planner", "coordinator", "plan_response", response_message["payload"])
         return plan
     
     
@@ -116,7 +164,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(request_message)
+        self.blackboard.add_communication("coordinator", "planner", "modification_request", request_message["payload"])
         
         # Call Planner
         modified_plan = self.planner.modify_plan(current_plan, feedback)
@@ -133,7 +181,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(response_message)
+        self.blackboard.add_communication("planner", "coordinator", "modification_response", response_message["payload"])
         
         return modified_plan
     
@@ -154,7 +202,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(request_message)
+        self.blackboard.add_communication("coordinator", "executor", "step_execution_request", request_message["payload"])
         
         # Call Executor for single step execution
         step_result = self.executor.execute_single_step(step, ifc_file_path, step_index)
@@ -171,12 +219,11 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(response_message)
+        self.blackboard.add_communication("executor", "coordinator", "step_execution_response", response_message["payload"])
         
         return step_result
     
     def _request_compliance_check(self, execution_results: List[Dict[str, Any]], regulation_text: str, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """Request compliance checking from Checker with three components"""
         print("Coordinator: Requesting compliance check from Checker")
         
         request_message = {
@@ -192,7 +239,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(request_message)
+        self.blackboard.add_communication("coordinator", "checker", "compliance_check_request", request_message["payload"])
         
         # Call Checker with three components
         compliance_report = self.checker.check_and_report(execution_results, regulation_text, plan)
@@ -208,7 +255,7 @@ class AgentCoordinator:
             }
         }
         
-        self._log_communication(response_message)
+        self.blackboard.add_communication("checker", "coordinator", "compliance_check_response", response_message["payload"])
         
         return compliance_report
     
@@ -274,12 +321,17 @@ class AgentCoordinator:
         """
         print(f"Coordinator: Starting step-by-step execution of plan {plan.get('plan_id', 'unknown')}")
         
-        # Initialize execution state
+        # Initialize execution state using blackboard
         current_plan = plan
         all_execution_results = []
         step_execution_history = []
         feedback_round = 0
         execution_status = "in_progress"
+        
+        # Update blackboard execution state
+        self.blackboard.current_step_index = 0
+        self.blackboard.feedback_rounds = 0
+        self.blackboard.execution_status = execution_status
         
         # Step-by-step execution with immediate feedback
         steps = current_plan.get("steps", [])
@@ -290,8 +342,10 @@ class AgentCoordinator:
             print(f"Coordinator: Executing step {current_step_index + 1}/{len(steps)}: {step.get('description', 'Unknown')}")
             
             # Execute single step
+            self.blackboard.current_step_index = current_step_index
             step_result = self._request_step_execution(step, ifc_file_path, current_step_index)
             step_execution_history.append(step_result)
+            self.blackboard.add_step_history(step_result)
             
             if step_result["step_status"] == "success":
                 print(f"Coordinator: Step {current_step_index + 1} completed successfully")
@@ -301,10 +355,14 @@ class AgentCoordinator:
                 if tool_results:
                     # Add each tool result to execution results for checker
                     all_execution_results.extend(tool_results)
+                    for result in tool_results:
+                        self.blackboard.add_execution_result(result)
                     print(f"Coordinator: Collected {len(tool_results)} tool results from step")
                 else:
                     # Fallback: use step_result if no tool_results
-                    all_execution_results.append(step_result.get("step_result", {}))
+                    result = step_result.get("step_result", {})
+                    all_execution_results.append(result)
+                    self.blackboard.add_execution_result(result)
                 
                 current_step_index += 1
                 
@@ -324,10 +382,15 @@ class AgentCoordinator:
                     }
                 }
                 
+                # Add failed step to blackboard
+                self.blackboard.add_failed_step(step, step_result.get("error_message", "Unknown error"))
+                
                 # Get modified plan from Planner
                 current_plan = self._request_plan_modification(current_plan, feedback_request)
                 steps = current_plan.get("steps", [])
                 feedback_round += 1
+                self.blackboard.feedback_rounds = feedback_round
+                self.blackboard.update_plan(current_plan, f"Feedback round {feedback_round}: {step_result.get('failure_reason', 'execution_failure')}")
                 
                 print(f"Coordinator: Plan modified (round {feedback_round}), continuing execution")
                 # Continue from current step with new plan
@@ -344,6 +407,9 @@ class AgentCoordinator:
         elif feedback_round >= max_feedback_rounds:
             execution_status = "max_feedback_rounds_exceeded"
             print("Coordinator: Maximum feedback rounds reached")
+        
+        # Update blackboard final status
+        self.blackboard.execution_status = execution_status
         
         return {
             "status": execution_status,

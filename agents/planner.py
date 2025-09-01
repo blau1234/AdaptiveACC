@@ -2,16 +2,23 @@ import json
 from typing import Dict, List, Any
 from utils.llm_client import LLMClient
 import re
+from models.blackboard_models import BlackboardMixin
 
-class Planner:
+class Planner(BlackboardMixin):
 
     def __init__(self):
+        super().__init__()
         self.llm_client = LLMClient()
         self.conversation_history = []
     
     def generate_initial_plan(self, regulation_text: str) -> Dict[str, Any]:
         try:
             print("Planner: Analyzing regulation text and generating initial plan...")
+            
+            # Use blackboard if available, otherwise use parameter
+            if hasattr(self, '_blackboard') and self._blackboard:
+                regulation_text = regulation_text or self.get_regulation_text()
+                self.log_communication("coordinator", "plan_generation", {"regulation_length": len(regulation_text)})
             
             # Analyze regulation to extract requirements
             regulation_analysis = self._analyze_regulation(regulation_text)
@@ -34,6 +41,11 @@ class Planner:
             })
             
             print(f"Planner: Generated initial plan with {len(plan_steps)} steps")
+            
+            # Update blackboard if available
+            if hasattr(self, '_blackboard') and self._blackboard:
+                self.blackboard.update_plan(plan, "initial_plan_generated")
+            
             return plan
             
         except Exception as e:
@@ -54,6 +66,10 @@ class Planner:
         try:
             print(f"Planner: Received feedback from Executor: {feedback.get('issue_type', 'unknown')}")
             
+            # Log to blackboard if available
+            if hasattr(self, '_blackboard') and self._blackboard:
+                self.log_communication("executor", "plan_modification_request", feedback)
+            
             # Use LLM to dynamically modify the plan based on feedback
             modified_plan = self._llm_modify_plan(current_plan, feedback)
             
@@ -72,6 +88,11 @@ class Planner:
             })
             
             print(f"Planner: Plan modified (modification #{modified_plan['modification_count']})")
+            
+            # Update blackboard if available
+            if hasattr(self, '_blackboard') and self._blackboard:
+                self.blackboard.update_plan(modified_plan, feedback.get('issue_description', 'Unknown issue'))
+            
             return modified_plan
             
         except Exception as e:

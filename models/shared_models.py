@@ -34,7 +34,6 @@ class ExecutionResultModel(BaseModel):
     detail: str = Field(..., description="Detailed result description")
     elements_checked: List[str] = Field(default_factory=list, description="List of checked elements")
     issues: List[str] = Field(default_factory=list, description="List of issues found")
-    execution_timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Execution timestamp")
 
 
 class StepExecutionResultModel(BaseModel):
@@ -46,26 +45,3 @@ class StepExecutionResultModel(BaseModel):
     execution_details: Dict[str, Any] = Field(default_factory=dict, description="Additional execution details")
 
 
-class ComplianceReportModel(BaseModel):
-    """Model for compliance reports"""
-    compliance_status: Literal["compliant", "non_compliant", "partial", "error"] = Field(..., description="Overall compliance status")
-    overall_score: float = Field(..., ge=0, le=100, description="Overall compliance score (0-100)")
-    total_checks: int = Field(..., ge=0, description="Total number of checks performed")
-    passed_checks: int = Field(..., ge=0, description="Number of passed checks")
-    failed_checks: int = Field(..., ge=0, description="Number of failed checks")
-    issues: List[str] = Field(default_factory=list, description="List of compliance issues")
-    recommendations: List[str] = Field(default_factory=list, description="List of recommendations")
-    report_timestamp: datetime = Field(default_factory=datetime.now, description="Report generation timestamp")
-    
-    @validator('passed_checks', 'failed_checks')
-    def validate_check_counts(cls, v, values):
-        if 'total_checks' in values and v > values['total_checks']:
-            raise ValueError('Check count cannot exceed total checks')
-        return v
-    
-    @validator('failed_checks')
-    def validate_total_consistency(cls, v, values):
-        if 'passed_checks' in values and 'total_checks' in values:
-            if values['passed_checks'] + v != values['total_checks']:
-                raise ValueError('Passed + failed checks must equal total checks')
-        return v

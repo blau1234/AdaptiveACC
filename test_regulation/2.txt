@@ -1,3 +1,1 @@
-The minimum width of the required exit is 36 inches (914 mm),
-with a net clear width of 32 inches (813 mm). The minimum
-height of a required exit is 6 feet 8 inches (2032 mm).
+The minimum height of a required exit is 6 feet 8 inches (2032 mm).
