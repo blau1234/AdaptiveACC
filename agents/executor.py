@@ -1,158 +1,93 @@
 
 import json
-from typing import Dict, List, Any, Optional, Callable, Tuple
-from dataclasses import dataclass
-import re
+from typing import Dict, List, Any
+import uuid
 from utils.llm_client import LLMClient
-from tools.tool_registry import create_building_tool_registry
 from toolregistry import ToolRegistry
-from models.blackboard_models import BlackboardMixin
-
-@dataclass
-class ReActStep:
-    """ReAct step result"""
-    thought: str
-    action: str
-    action_input: Dict[str, Any]
-    should_continue: bool
+from meta_tools.meta_tool_manager import MetaToolManager
+from data_models.shared_models import ReActResponse
+from shared_context import SharedContext
     
-class Executor(BlackboardMixin):
+
+class Executor:
    
-    def __init__(self, llm_client=None, tool_registry=None):
-        super().__init__()
+    def __init__(self, llm_client=None, shared_context: SharedContext = None):
         self.llm_client = llm_client or LLMClient()
-        self.execution_history = []
-        self.tool_registry = tool_registry or create_building_tool_registry()
+        self.shared_context = shared_context
+        # Remove execution_history as it's now in shared context
         
-        # Build ReAct system prompt
-        self.system_prompt = self._build_react_system_prompt()
+        # Pure meta tool architecture - only meta tools registry
+        self.meta_tool_registry = ToolRegistry()
+        
+        print(f"Executor: Initialized with {len(self.meta_tool_registry.get_available_tools())} meta tools")
     
-    def _build_react_system_prompt(self) -> str:
-        """Build ReAct system prompt with dynamic tool information"""
+    
+    
+    def _build_react_system_prompt(self, context_info: Dict[str, Any] = None) -> str:
+        """Build ReAct system prompt with meta tools and context information"""
         
-        # Get available tool information
-        available_tools = self._get_available_tools()
-        tools_section = self._format_tools_for_prompt(available_tools)
+        # Get meta tools formatted for prompt
+        tools_section = MetaToolManager.get_meta_tools_description()
         
-        return """
+        # Include context information if available
+        context_section = ""
+        if context_info:
+            session_info = context_info.get("session_info", {})
+            current_state = context_info.get("current_state", {})
+            relevant_history = context_info.get("relevant_history", [])
+            
+            context_section = f"""
+        ## Current Context
+        - Session ID: {session_info.get('session_id', 'unknown')}
+        - Current Step: {current_state.get('current_step_description', 'unknown')}
+        - Step Index: {current_state.get('step_index', 0)}
+        - IFC File: {session_info.get('ifc_file_path', 'unknown')}
+        
+        ## Recent Execution History (for context):
+        {json.dumps(relevant_history[:3], indent=2) if relevant_history else "No previous execution history"}
+        """
+        
+        return f"""
         You are an intelligent building compliance checker using the ReAct (Reasoning and Acting) framework.
-
+        {context_section}
+        
         ## ReAct Framework Process
         For each task, follow this iterative cycle until completion:
 
         1. **Thought**: Analyze the current situation and plan your next step
-        2. **Action**: Choose which tool to use
-        3. **Action Input**: Specify the input parameters for the tool
-        4. **Observation**: [This will be filled by the system with actual tool results]
-        5. **Continue or Finish**: Determine if you need another cycle
+        2. **Action**: Choose which meta tool to use
+        3. **Action Input**: Specify the input parameters for the meta tool
+        4. **Observation**: [System will provide actual tool results]
+        5. **Continue or Finish**: Determine if you need another cycle or task is complete
 
-        ## Available Tools
+        ## Available Meta Tools
         {tools_section}
 
-        ## Response Format
-        You must respond with ONLY the following JSON structure:
+        ## Task Execution Guidelines
 
-        ```json
-        {{
-            "thought": "Your reasoning about what needs to be done next",
-            "action": "exact_tool_name_from_available_tools",
-            "action_input": {{
-                "parameter_name": "parameter_value"
-            }},
-            "is_final": false
-        }}
+        **Meta Tool Selection Strategy:**
+        - Use `tool_selection` to find appropriate domain tools for your task
+        - Use `tool_creation` when no existing domain tool can handle your requirements
+        - Use `tool_execution` to run specific domain tools you've identified
+        - Use `tool_registration` to register newly created tools
+        - Use `tool_storage` to persistently store tools for future use
 
-        When the task is complete, set "is_final": true and omit the action fields.
-        
-        IMPORTANT: The "action" field must contain the exact tool name from the available tools list above.
-        The "action_input" must contain the parameters required by the selected tool.
+        **Error Handling:**
+        - If a meta tool fails, analyze the error and try alternative approaches
+        - Consider simpler alternatives or different parameters if complex operations fail
+        - Always explain your reasoning clearly in your thought process
 
-        ## Guidelines
-        -Tool Selection Strategy
-        Identify requirements: What specific elements or data do you need?
-        Choose appropriate tools: Select tools that match your current needs
-        Extract systematically: Use multiple calls if needed for different element types
-        Focus on data extraction: Your role is to gather information, not perform compliance checks
+        **Efficiency Guidelines:**
+        - Complete tasks in minimum steps while being thorough
+        - Combine related operations when possible through meta tools
+        - Be specific about requirements when using tool creation or selection meta tools
+        - Focus on systematic approach: search → select/create → execute → store (if new)
 
-        -Error Handling
-        If a tool fails, analyze the error and try alternative approaches
-        Use simpler tools or different parameters if complex ones fail
-        Always explain your reasoning in the "thought" field
-
-        -Efficiency Tips
-        Complete tasks in minimum steps while being thorough
-        Combine related operations when possible
-        Be specific about element types and parameters
-
-        ## Example Responses
-        
-        Example 1 - Element extraction:
-        ```json
-        {{
-            "thought": "I need to extract all door elements first to analyze their dimensions. I'll start by getting all IfcDoor elements from the building model.",
-            "action": "get_elements_by_type",
-            "action_input": {{
-                "element_type": "IfcDoor"
-            }},
-            "is_final": false
-        }}
-        ```
+        **Task Completion:**
+        - Mark the task as final when all required information has been gathered or processed
+        - Provide clear summary of accomplishments in final responses
         
         """.format(tools_section=tools_section)
-    
-    def _get_available_tools(self) -> Dict[str, Dict[str, str]]:
-        """Get available tools from tool registry"""
-        tools_info = {}
-        
-        # Get all tools schema from ToolRegistry  
-        try:
-            tools_schema = self.tool_registry.get_tools_json(api_format="openai-chatcompletion")
-            
-            for tool_schema in tools_schema:
-                if tool_schema.get("type") == "function":
-                    func_info = tool_schema.get("function", {})
-                    tool_name = func_info.get("name", "unknown")
-                    
-                    # Extract parameter descriptions
-                    params_schema = func_info.get("parameters", {})
-                    properties = params_schema.get("properties", {})
-                    required_fields = params_schema.get("required", [])
-                    
-                    params_desc = []
-                    for param_name, param_info in properties.items():
-                        required = "(required)" if param_name in required_fields else "(optional)"
-                        desc = param_info.get("description", param_info.get("title", "No description"))
-                        params_desc.append(f"{param_name} {required}: {desc}")
-                    
-                    tools_info[tool_name] = {
-                        "description": func_info.get("description", "No description available"),
-                        "category": "analysis",  # Default category
-                        "parameters": "; ".join(params_desc) if params_desc else "No parameters required",
-                        "usage": f"Use this tool for building compliance analysis",
-                        "example": f'{{"parameter": "value"}} - {func_info.get("description", "tool")}'
-                    }
-        
-        except Exception as e:
-            print(f"Error getting tools from registry: {e}")
-            # Fallback to empty tools if there's an error
-            tools_info = {}
-        
-        return tools_info
-    
-    def _format_tools_for_prompt(self, tools: Dict[str, Dict[str, str]]) -> str:
-        """Format tool information for prompt format"""
-        tools_text = "Available tools for building compliance checking:\n\n"
-        
-        for tool_name, info in tools.items():
-            tools_text += f"""
-            ### {tool_name} ({info.get('category', 'general')})
-            - **Description**: {info['description']}
-            - **Usage**: {info['usage']} 
-            - **Parameters**: {info['parameters']}
-            - **Example**: {info['example']}
-
-            """
-        return tools_text
             
     
     def execute_step(self, 
@@ -160,18 +95,17 @@ class Executor(BlackboardMixin):
                     ifc_file_path: str,
                     max_iterations: int = 5) -> Dict[str, Any]:
        
+        # Get context information from shared context
+        context_info = None
+        if self.shared_context:
+            context_info = self.shared_context.get_context_for_agent("executor")
+       
         # Initialize execution context
         context = {
             "step": step,
             "ifc_file_path": ifc_file_path,
             "history": [],
         }
-        
-        # Use blackboard data if available
-        if hasattr(self, '_blackboard') and self._blackboard:
-            context["regulation_text"] = self.get_regulation_text()
-            context["current_plan"] = self.get_current_plan()
-            context["execution_results"] = self.get_execution_results()
         
         # Initial state
         current_state = {
@@ -193,43 +127,37 @@ class Executor(BlackboardMixin):
                 current_state=current_state,
                 history=context["history"],
                 iteration=iteration,
-                context=context
+                context=context,
+                context_info=context_info
             )
             
-            # 2. Validate and parse response
-            if not self._validate_react_response(react_response):
-                return self._create_error_result(
-                    step_id=step.get("step_id"),
-                    error="Invalid ReAct response format"
-                )
-            
-            # 3. Check if completed first
-            if react_response.get("is_final", False):
+            # 2. Check if completed first (Pydantic handles validation automatically)
+            if react_response.is_final:
                 # Record final thinking process
                 context["history"].append({
                     "iteration": iteration + 1,
-                    "thought": react_response["thought"],
+                    "thought": react_response.thought,
                     "action": "completed"
                 })
                 return self._create_success_result(
                     step_id=step.get("step_id"),
-                    result=react_response.get("action_input", {"message": "Task completed successfully"}),
+                    result=react_response.action_input or {"message": "Task completed successfully"},
                     history=context["history"],
                     iterations_used=iteration + 1,
                     tool_results=tool_execution_results
                 )
             
-            # 4. Record thinking process for non-final responses
+            # 3. Record thinking process for non-final responses
             context["history"].append({
                 "iteration": iteration + 1,
-                "thought": react_response["thought"],
-                "action": react_response["action"]
+                "thought": react_response.thought,
+                "action": react_response.action
             })
             
-            # 5. Execute action
+            # 4. Execute action
             action_result = self._execute_action(
-                action_name=react_response["action"],
-                action_input=react_response["action_input"],
+                action_name=react_response.action,
+                action_input=react_response.action_input or {},
                 context=context
             )
             
@@ -237,10 +165,10 @@ class Executor(BlackboardMixin):
             if action_result.get("success") and "result" in action_result:
                 tool_execution_results.append(action_result["result"])
             
-            # 6. Update state
+            # 5. Update state
             current_state = {
                 "observation": self._format_observation(action_result),
-                "last_action": react_response["action"],
+                "last_action": react_response.action,
                 "last_result": action_result
             }
             
@@ -265,7 +193,8 @@ class Executor(BlackboardMixin):
                            current_state: Dict[str, Any],
                            history: List[Dict[str, Any]],
                            iteration: int,
-                           context: Dict[str, Any]) -> Dict[str, Any]:
+                           context: Dict[str, Any],
+                           context_info: Dict[str, Any] = None) -> ReActResponse:
         
         # Build history summary
         history_summary = self._build_history_summary(history)
@@ -281,11 +210,22 @@ class Executor(BlackboardMixin):
 
         Based on the current situation, what should be the next action? 
         Remember to think step by step and choose the most appropriate tool from the available tools.
+        
+        IMPORTANT: 
+        - If the task is complete, set is_final=True and omit action/action_input fields
+        - Otherwise, provide thought, action (exact tool name), and action_input (tool parameters)
         """
                 
         try:
-            response = self.llm_client.generate_response(prompt, self.system_prompt)
-            return self._parse_llm_response(response)
+            # Build system prompt with context information
+            system_prompt = self._build_react_system_prompt(context_info)
+            
+            response = self.llm_client.generate_response(
+                prompt, 
+                system_prompt, 
+                response_model=ReActResponse
+            )
+            return response
         except Exception as e:
             print(f"LLM call failed: {e}")
             raise RuntimeError(f"ReAct LLM call failed: {e}") from e
@@ -296,138 +236,90 @@ class Executor(BlackboardMixin):
                        action_input: Dict[str, Any],
                        context: Dict[str, Any]) -> Dict[str, Any]:
         
-        # Special action: final answer
         if action_name == "final_answer":
-            return {
-                "success": True,
-                "result": action_input,
-                "is_final": True
-            }
+            return {"success": True, "result": action_input, "is_final": True}
         
-        # Use LLM-selected tool name directly
-        selected_tool = action_name
-        
-        # Check if tool exists
-        if selected_tool not in self.tool_registry.get_available_tools():
-            return {
-                "success": False,
-                "error": f"Tool '{selected_tool}' not found in tool library",
-                "tool_name": selected_tool,
-                "available_tools": self.tool_registry.get_available_tools(),
-                "critical_failure": False
-            }
-        
-        # Execute the LLM-selected tool with LLM-provided parameters
         try:
-            # Add ifc_file_path to parameters for tool execution
+            # Prepare parameters for meta tool
             tool_params = action_input.copy()
-            tool_params["ifc_file_path"] = context["ifc_file_path"]
+            # Add context for meta tools that may need it
+            if "ifc_file_path" in context:
+                tool_params["execution_context"] = json.dumps({"ifc_file_path": context["ifc_file_path"]})
             
-            # Get the tool function and execute it directly
-            tool_func = self.tool_registry.get_callable(selected_tool)
-            if tool_func is None:
-                return {
-                    "success": False,
-                    "error": f"Tool '{selected_tool}' not found or not callable",
-                    "tool_name": selected_tool,
-                    "critical_failure": True
-                }
+            # Execute meta tool using ToolRegistry native API
+            tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
+            tool_call = {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": action_name, "arguments": json.dumps(tool_params)}
+            }
             
-            result = tool_func(**tool_params)
+            tool_responses = self.meta_tool_registry.execute_tool_calls([tool_call])
+            result = tool_responses.get(tool_call_id)
+            
+            if result is None:
+                return {"success": False, "error": f"No result from meta tool {action_name}", "tool_name": action_name}
+            
+            # Meta tools return JSON strings - parse them
+            if isinstance(result, str):
+                try:
+                    parsed_result = json.loads(result)
+                    return {
+                        "success": parsed_result.get("success", False),
+                        "result": parsed_result,
+                        "tool_name": action_name,
+                        "is_meta_tool": True
+                    }
+                except json.JSONDecodeError:
+                    return {
+                        "success": False,
+                        "result": result,
+                        "tool_name": action_name,
+                        "error": "Failed to parse meta tool JSON response"
+                    }
             
             return {
                 "success": True,
-                "tool_name": selected_tool,
-                "parameters_used": action_input,
-                "result": result
+                "tool_name": action_name,
+                "result": result,
+                "is_meta_tool": True
             }
             
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Tool execution failed: {str(e)}",
-                "tool_name": selected_tool,
-                "parameters_used": action_input,
+                "error": f"Meta tool execution failed: {str(e)}",
+                "tool_name": action_name,
                 "critical_failure": "critical" in str(e).lower()
             }
     
     
-    def _parse_llm_response(self, response: str) -> Dict[str, Any]:    
-        # Try direct JSON parsing
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            pass
-        
-        # Try extracting JSON block
-        json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except:
-                pass
-        
-        # Try extracting content between braces
-        brace_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if brace_match:
-            try:
-                return json.loads(brace_match.group())
-            except:
-                pass
-        
-        # If all fail, try extracting information from text
-        return self._extract_from_text(response)
     
-    def _extract_from_text(self, text: str) -> Dict[str, Any]:
-        """Extract information from unstructured text"""
-        # This is the last fallback option
-        thought_match = re.search(r'thought[:\s]+(.*?)(?:action|$)', text, re.IGNORECASE | re.DOTALL)
-        action_match = re.search(r'action[:\s]+(.*?)(?:action_input|$)', text, re.IGNORECASE | re.DOTALL)
-        
-        return {
-            "thought": thought_match.group(1).strip() if thought_match else "Unable to parse thought",
-            "action": action_match.group(1).strip() if action_match else "basic_validation",
-            "action_input": {},
-            "is_final": False
-        }
-    
-    def _validate_react_response(self, response: Dict[str, Any]) -> bool:
-        """Validate ReAct response format"""
-        # Check if response has thought
-        if "thought" not in response:
-            return False
-        
-        # If it's a final response, only thought and is_final are required
-        if response.get("is_final", False):
-            return True
-            
-        # For non-final responses, action and action_input are required
-        required_fields = ["thought", "action", "action_input"]
-        return all(field in response for field in required_fields)
     
     def _format_observation(self, action_result: Dict[str, Any]) -> str:
         """Format action result as observation description"""
         if action_result.get("success"):
             tool_name = action_result.get("tool_name", "unknown tool")
-            result_summary = self._summarize_result(action_result.get("result", {}))
+            result = action_result.get("result", {})
+            
+            # Generate result summary
+            if isinstance(result, dict):
+                if "summary" in result:
+                    result_summary = result["summary"]
+                else:
+                    # Extract key information
+                    key_info = []
+                    for k, v in result.items():
+                        if k in ["status", "count", "value", "measurement", "compliant"]:
+                            key_info.append(f"{k}={v}")
+                    result_summary = ", ".join(key_info) if key_info else str(result)[:100]
+            else:
+                result_summary = str(result)[:100]
+                
             return f"Successfully executed {tool_name}. Result: {result_summary}"
         else:
             error = action_result.get("error", "Unknown error")
             return f"Action failed: {error}"
-    
-    def _summarize_result(self, result: Any) -> str:
-        """Generate result summary"""
-        if isinstance(result, dict):
-            if "summary" in result:
-                return result["summary"]
-            # Extract key information
-            key_info = []
-            for k, v in result.items():
-                if k in ["status", "count", "value", "measurement", "compliant"]:
-                    key_info.append(f"{k}={v}")
-            return ", ".join(key_info) if key_info else str(result)
-        else:
-            return str(result)
     
     def _build_history_summary(self, history: List[Dict[str, Any]]) -> str:
         """Build history summary"""
@@ -442,20 +334,6 @@ class Executor(BlackboardMixin):
         
         return "\n".join(summaries)
     
-    def get_available_tools_info(self) -> str:
-        """Get formatted information about available tools for external use"""
-        tools_info = "Available Tools:\n"
-        tools_info += "=" * 50 + "\n"
-        
-        tools = self._get_available_tools()
-        for tool_name, tool_info in tools.items():
-            tools_info += f"\n**{tool_name}** ({tool_info.get('category', 'analysis')})\n"
-            tools_info += f"Description: {tool_info.get('description', 'No description')}\n"
-            tools_info += f"Parameters: {tool_info.get('parameters', 'None')}\n"
-            
-            tools_info += "-" * 30 + "\n"
-        
-        return tools_info
     
     # === Result creation methods ===
     
@@ -502,10 +380,7 @@ class Executor(BlackboardMixin):
     
     def execute_single_step(self, step: Dict[str, Any], ifc_file_path: str, step_id: int) -> Dict[str, Any]:
         """
-        Execute single step - this is the primary interface for Coordinator
-        
-        This method wraps execute_step with additional context and status mapping
-        for better integration with the Coordinator.
+        Execute single step using ReAct loop - delegates tool selection to ReAct
         
         Args:
             step: Single step from plan
@@ -515,43 +390,50 @@ class Executor(BlackboardMixin):
         Returns:
             Dict: Step execution result with step_status field
         """
-        print(f"Executor: Executing single step {step_id}: {step.get('description', 'Unknown')}")
-        
-        # Log to blackboard if available
-        if hasattr(self, '_blackboard') and self._blackboard:
-            self.log_communication("coordinator", "step_execution_start", {
-                "step_id": step_id,
-                "step_description": step.get('description', 'Unknown'),
-                "ifc_file_path": ifc_file_path
-            })
+        step_description = step.get('description', 'Unknown')
+        print(f"Executor: Executing single step {step_id}: {step_description}")
         
         try:
-            # Execute step using ReAct framework
+            # Execute with ReAct loop - let LLM decide which meta tools to use
             result = self.execute_step(step, ifc_file_path)
-            
-            # Map result status to step_status for coordinator compatibility
-            if result.get("status") == "success":
-                result["step_status"] = "success"
-                result["step_result"] = result.get("result", {})
-            elif result.get("status") == "timeout":
-                result["step_status"] = "failed"
-                result["failure_reason"] = "timeout"
-                result["error_message"] = result.get("error", "Step execution timeout")
-            else:
-                result["step_status"] = "failed" 
-                result["failure_reason"] = "execution_failure"
-                result["error_message"] = result.get("error", "Step execution failed")
-            
-            return result
+            return self._map_execution_result(result, step_id, "react_execution")
             
         except Exception as e:
             print(f"Executor: Single step execution failed with exception: {e}")
             return {
                 "step_status": "failed",
-                "failure_reason": "exception",
+                "failure_reason": "exception", 
                 "error_message": str(e),
                 "status": "error"
             }
+    
+    
+    
+    
+    def get_execution_context(self) -> Dict[str, Any]:
+        """Get execution context from shared context"""
+        if self.shared_context:
+            return self.shared_context.get_context_for_agent("executor")
+        return {}
+
+    def _map_execution_result(self, result: Dict[str, Any], step_id: int, execution_type: str) -> Dict[str, Any]:
+        """Map execution result to coordinator-compatible format"""
+        mapped_result = result.copy()
+        mapped_result["execution_type"] = execution_type
+        
+        if result.get("status") == "success":
+            mapped_result["step_status"] = "success"
+            mapped_result["step_result"] = result.get("result", {})
+        elif result.get("status") == "timeout":
+            mapped_result["step_status"] = "failed"
+            mapped_result["failure_reason"] = "timeout"
+            mapped_result["error_message"] = result.get("error", "Step execution timeout")
+        else:
+            mapped_result["step_status"] = "failed" 
+            mapped_result["failure_reason"] = "execution_failure"
+            mapped_result["error_message"] = result.get("error", "Step execution failed")
+        
+        return mapped_result
     
 
     def get_execution_history(self) -> List[Dict[str, Any]]:

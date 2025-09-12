@@ -1,24 +1,28 @@
 import json
 from typing import Dict, List, Any
 from utils.llm_client import LLMClient
-import re
-from models.blackboard_models import BlackboardMixin
+from data_models.shared_models import PlanModel, RegulationAnalysis, StepModel, ModifiedPlan
+from shared_context import SharedContext
 
-class Planner(BlackboardMixin):
+class Planner:
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, shared_context: SharedContext = None):
         self.llm_client = LLMClient()
-        self.conversation_history = []
+        self.shared_context = shared_context
+        # Remove conversation_history as it's now in shared context
     
-    def generate_initial_plan(self, regulation_text: str) -> Dict[str, Any]:
+    def generate_initial_plan(self) -> Dict[str, Any]:
+        """Generate initial plan using regulation text from shared context"""
         try:
             print("Planner: Analyzing regulation text and generating initial plan...")
             
-            # Use blackboard if available, otherwise use parameter
-            if hasattr(self, '_blackboard') and self._blackboard:
-                regulation_text = regulation_text or self.get_regulation_text()
-                self.log_communication("coordinator", "plan_generation", {"regulation_length": len(regulation_text)})
+            # Get regulation text from shared context
+            if not self.shared_context:
+                raise RuntimeError("Shared context not available")
+            
+            regulation_text = self.shared_context.session_info.get("regulation_text")
+            if not regulation_text:
+                raise RuntimeError("Regulation text not found in shared context")
             
             # Analyze regulation to extract requirements
             regulation_analysis = self._analyze_regulation(regulation_text)
@@ -26,26 +30,17 @@ class Planner(BlackboardMixin):
             # Generate structured plan
             plan_steps = self._generate_plan_steps(regulation_analysis, regulation_text)
             
+            # Convert StepModel objects to dict format for compatibility
+            steps_dict = [step.model_dump() for step in plan_steps]
+            
             plan = {
                 "plan_id": self._generate_plan_id(),
-                "regulation_summary": regulation_analysis.get("summary", ""),
-                "steps": plan_steps,
+                "regulation_summary": regulation_analysis.summary,
+                "steps": steps_dict,
                 "modification_count": 0
             }
             
-            self.conversation_history.append({
-                "type": "plan_generation",
-                "timestamp": self._get_timestamp(),
-                "plan_id": plan["plan_id"],
-                "steps_count": len(plan_steps)
-            })
-            
             print(f"Planner: Generated initial plan with {len(plan_steps)} steps")
-            
-            # Update blackboard if available
-            if hasattr(self, '_blackboard') and self._blackboard:
-                self.blackboard.update_plan(plan, "initial_plan_generated")
-            
             return plan
             
         except Exception as e:
@@ -66,12 +61,13 @@ class Planner(BlackboardMixin):
         try:
             print(f"Planner: Received feedback from Executor: {feedback.get('issue_type', 'unknown')}")
             
-            # Log to blackboard if available
-            if hasattr(self, '_blackboard') and self._blackboard:
-                self.log_communication("executor", "plan_modification_request", feedback)
+            # Get execution context from shared context for better plan modification
+            context_info = None
+            if self.shared_context:
+                context_info = self.shared_context.get_context_for_agent("planner")
             
             # Use LLM to dynamically modify the plan based on feedback
-            modified_plan = self._llm_modify_plan(current_plan, feedback)
+            modified_plan = self._llm_modify_plan(current_plan, feedback, context_info)
             
             # Update plan metadata
             modified_plan["status"] = "modified"
@@ -79,19 +75,10 @@ class Planner(BlackboardMixin):
             modified_plan["last_modified"] = self._get_timestamp()
             modified_plan["modification_reason"] = feedback.get("issue_description", "Unknown issue")
             
-            self.conversation_history.append({
-                "type": "plan_modification",
-                "timestamp": self._get_timestamp(),
-                "plan_id": modified_plan["plan_id"],
-                "feedback_type": feedback.get("issue_type"),
-                "modification_count": modified_plan["modification_count"]
-            })
+            # Planning history is now managed in shared context by coordinator
             
             print(f"Planner: Plan modified (modification #{modified_plan['modification_count']})")
             
-            # Update blackboard if available
-            if hasattr(self, '_blackboard') and self._blackboard:
-                self.blackboard.update_plan(modified_plan, feedback.get('issue_description', 'Unknown issue'))
             
             return modified_plan
             
@@ -99,7 +86,7 @@ class Planner(BlackboardMixin):
             print(f"Planner: Failed to modify plan: {e}")
             raise RuntimeError(f"Plan modification failed: {e}") from e
     
-    def _analyze_regulation(self, regulation_text: str) -> Dict[str, Any]:
+    def _analyze_regulation(self, regulation_text: str) -> RegulationAnalysis:
         """Analyze regulation text to extract key requirements"""
         system_prompt = """You are a building code regulation analysis expert.
         
@@ -109,89 +96,50 @@ class Planner(BlackboardMixin):
         3. Measurable criteria
         4. Potential check points
         
-        Return JSON format:
-        {
-            "summary": "Brief summary of the regulation",
-            "requirements": [
-                {
-                    "id": "req_1",
-                    "description": "Requirement description",
-                    "type": "structural|safety|accessibility|other",
-                    "measurable": true/false,
-                    "criteria": "Specific measurement criteria if applicable"
-                }
-            ],
-            "complexity": "low|medium|high",
-            "estimated_checks": 3
-        } """
+        Provide comprehensive analysis with clear requirement identification."""
         
         prompt = f""" 
         Please analyze this building regulation text: {regulation_text}
         """
-        response = self.llm_client.generate_response(prompt, system_prompt)
-       
-        try:
-            json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
-            
-            if json_match:
-                json_str = json_match.group(1)  
-                return json.loads(json_str)
-            else:
-                return json.loads(response)
-            
-        except Exception as e:
-            print(f"Parse error: {e}")
-            raise RuntimeError(f"Failed to parse regulation analysis response: {e}") from e
+        
+        return self.llm_client.generate_response(
+            prompt, 
+            system_prompt,
+            response_model=RegulationAnalysis
+        )
     
-    def _generate_plan_steps(self, regulation_analysis: Dict[str, Any], regulation_text: str) -> List[Dict[str, Any]]:
+    def _generate_plan_steps(self, regulation_analysis: RegulationAnalysis, regulation_text: str) -> List[StepModel]:
         """Generate structured plan steps based on regulation analysis"""
 
         system_prompt = """You are a building compliance plan generator.
         
         Based on the regulation analysis, create a step-by-step execution plan.
         Each step should be actionable and specific.
-        only include intermediate information extraction steps.
+        Only include intermediate information extraction steps.
         Do **not** include any comparison, final summary or overall validation step.
 
-        Return JSON array of steps:
-        [
-            {
-                "step_id": "step_1",
-                "description": "Clear description of what to check",
-                "priority": "high|medium|low",
-                "expected_output": "Description of expected result",
-                "dependencies": ["step_id_that_must_complete_first"]
-            }
-        ]"""
+        For each step, provide:
+        - Clear step identifier 
+        - Detailed description of what to check/measure
+        - Priority level based on regulation importance
+        - Task type (measurement, analysis, etc.)
+        - Expected output format
+        - Any dependencies on other steps
+        - Tool requirements if specific tools are needed"""
         
         prompt = f"""
-        Regulation Analysis: {json.dumps(regulation_analysis, indent=2)}
+        Regulation Analysis: {regulation_analysis.model_dump_json(indent=2)}
         Original Regulation: {regulation_text}
-        Generate a detailed execution plan:
+        Generate a detailed execution plan with actionable steps:
         """
         
-        response = self.llm_client.generate_response(prompt, system_prompt)
-        
-        try:
-            json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
-            
-            if json_match:
-                json_str = json_match.group(1)  
-                parsed_result = json.loads(json_str)
-            else:
-                parsed_result = json.loads(response)
-            
-            # Validate that the result is a list
-            if not isinstance(parsed_result, list):
-                raise ValueError(f"Expected list of steps, got {type(parsed_result).__name__}")
-            
-            return parsed_result
-            
-        except Exception as e:
-            print(f"Parse error: {e}")
-            raise RuntimeError(f"Failed to parse plan steps response: {e}") from e
+        return self.llm_client.generate_response(
+            prompt, 
+            system_prompt,
+            response_model=List[StepModel]
+        )
     
-    def _llm_modify_plan(self, current_plan: Dict[str, Any], feedback: Dict[str, Any]) -> Dict[str, Any]:
+    def _llm_modify_plan(self, current_plan: Dict[str, Any], feedback: Dict[str, Any], context_info: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Use LLM to dynamically modify plan based on feedback
         
@@ -213,27 +161,25 @@ class Planner(BlackboardMixin):
         5. Split complex steps into simpler ones
         6. Combine simple steps if appropriate
         
-        IMPORTANT: Return the COMPLETE modified plan in the same JSON format, preserving all existing fields and structure.
-        Only modify what's necessary to address the feedback.
+        Focus on creating actionable, specific steps with clear:
+        - Step identifiers
+        - Detailed descriptions
+        - Appropriate task types
+        - Priority levels
+        - Expected outputs
+        - Tool requirements
+        - Dependencies between steps
         
-        Return JSON format:
-        {
-            "plan_id": "keep_same_id",  
-            "regulation_summary": "keep_existing",
-            "requirements": [...keep_existing...],
-            "steps": [
-                {
-                    "step_id": "step_1",  // keep existing or create new IDs
-                    "description": "Modified or new description",
-                    "task_type": "file_analysis|element_check|measurement|calculation|validation",
-                    "priority": "high|medium|low",
-                    "tool_description": "Description of tool needed",
-                    "expected_output": "Expected result",
-                    "dependencies": ["step_dependencies"]
-                }
-            ]
-        }"""
+        Address the specific issues mentioned in the feedback."""
         
+        # Include execution context if available
+        execution_context_str = ""
+        if context_info and context_info.get("relevant_history"):
+            execution_context_str = f"""
+        EXECUTION HISTORY (for context):
+        {json.dumps(context_info['relevant_history'][:5], indent=2)}
+        """
+
         prompt = f"""
         CURRENT PLAN:
         {json.dumps(current_plan, indent=2)}
@@ -245,35 +191,27 @@ class Planner(BlackboardMixin):
         - Step Index: {feedback.get('step_index', 'unknown')}
         - Error Message: {feedback.get('error_message', 'No error message')}
         - Execution Context: {json.dumps(feedback.get('execution_context', {}), indent=2)}
+        {execution_context_str}
         
         Please analyze the feedback and modify the plan to address the issues. 
         Be smart and practical - if a tool failed, suggest alternatives. 
         If information is missing, add steps to gather it.
         If a step is unclear, clarify or break it down.
-        
-        Provide the complete modified plan:
+        Consider the execution history to avoid repeating past mistakes.
         """
         
-        response = self.llm_client.generate_response(prompt, system_prompt)
+        modified_plan_result = self.llm_client.generate_response(
+            prompt, 
+            system_prompt,
+            response_model=ModifiedPlan
+        )
         
-        try:
-            modified_plan = json.loads(response)
-            
-            # Validate the modified plan has required structure
-            if not isinstance(modified_plan.get("steps"), list):
-                raise ValueError("Modified plan must have steps as list")
-            
-            if len(modified_plan["steps"]) == 0:
-                raise ValueError("Modified plan must have at least one step")
-            
-            # Preserve original plan metadata that shouldn't change
-            modified_plan["plan_id"] = current_plan["plan_id"]
-            
-            return modified_plan
-            
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
-            print(f"Failed to parse LLM plan modification: {e}")
-            raise RuntimeError(f"Plan modification failed: {e}") from e
+        # Convert back to dict format with preserved metadata
+        modified_plan_dict = modified_plan_result.model_dump()
+        modified_plan_dict["plan_id"] = current_plan["plan_id"]  # Preserve original ID
+        modified_plan_dict["regulation_summary"] = current_plan.get("regulation_summary", "")
+        
+        return modified_plan_dict
     
     def _generate_plan_id(self) -> str:
         """Generate unique plan ID"""
@@ -285,6 +223,8 @@ class Planner(BlackboardMixin):
         from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    def get_conversation_history(self) -> List[Dict[str, Any]]:
-        """Get conversation history with executor"""
-        return self.conversation_history.copy()
+    def get_execution_context(self) -> Dict[str, Any]:
+        """Get execution context from shared context"""
+        if self.shared_context:
+            return self.shared_context.get_context_for_agent("planner")
+        return {}
