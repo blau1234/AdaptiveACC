@@ -1,56 +1,125 @@
-
 import json
 from typing import Dict, List, Any
 import uuid
 from utils.llm_client import LLMClient
-from toolregistry import ToolRegistry
-from meta_tools.meta_tool_manager import MetaToolManager
-from data_models.shared_models import ReActResponse
-from shared_context import SharedContext
-    
+from meta_tools.meta_tool_registry import MetaToolRegistry
+from meta_tools.tool_selection import ToolSelection
+from meta_tools.tool_execution import ToolExecution
+from meta_tools.tool_registration import ToolRegistration
+from meta_tools.tool_storage import ToolStorage
+from meta_tools.tool_creation.tool_creator import ToolCreation
+from models.common_models import ReActResponse, ExecutionState, StepExecutionResult, MetaToolResult
+from models.shared_context import SharedContext
+
 
 class Executor:
-   
-    def __init__(self, llm_client=None, shared_context: SharedContext = None):
-        self.llm_client = llm_client or LLMClient()
-        self.shared_context = shared_context
-        # Remove execution_history as it's now in shared context
-        
-        # Pure meta tool architecture - only meta tools registry
-        self.meta_tool_registry = ToolRegistry()
-        
+    """Executor agent implementing ReAct framework with local state management"""
+
+    def __init__(self):
+        self.llm_client = LLMClient()
+        self.shared_context = SharedContext.get_instance()
+        self.meta_tool_registry = MetaToolRegistry.get_instance()
+
+        # Register meta tools
+        self._register_required_tools()
         print(f"Executor: Initialized with {len(self.meta_tool_registry.get_available_tools())} meta tools")
-    
-    
-    
-    def _build_react_system_prompt(self, context_info: Dict[str, Any] = None) -> str:
-        """Build ReAct system prompt with meta tools and context information"""
-        
-        # Get meta tools formatted for prompt
-        tools_section = MetaToolManager.get_meta_tools_description()
-        
-        # Include context information if available
-        context_section = ""
-        if context_info:
-            session_info = context_info.get("session_info", {})
-            current_state = context_info.get("current_state", {})
-            relevant_history = context_info.get("relevant_history", [])
-            
-            context_section = f"""
-        ## Current Context
-        - Session ID: {session_info.get('session_id', 'unknown')}
-        - Current Step: {current_state.get('current_step_description', 'unknown')}
-        - Step Index: {current_state.get('step_index', 0)}
-        - IFC File: {session_info.get('ifc_file_path', 'unknown')}
-        
-        ## Recent Execution History (for context):
-        {json.dumps(relevant_history[:3], indent=2) if relevant_history else "No previous execution history"}
-        """
-        
-        return f"""
+
+    def _register_required_tools(self):
+        tools_to_register = [
+            ToolSelection().tool_selection,
+            ToolCreation().tool_creation,
+            ToolExecution().tool_execution,
+            ToolRegistration().tool_registration,
+            ToolStorage().tool_storage
+        ]
+
+        for tool_func in tools_to_register:
+            try:
+                self.meta_tool_registry.register(tool_func)
+            except Exception as e:
+                print(f"Failed to register meta tool {tool_func.__name__}: {e}")
+
+
+    # === Main Interface ===
+
+    def execute_step(self, max_iterations: int = 5) -> StepExecutionResult:
+        """Execute a single step using ReAct framework with local state management"""
+
+        # 1. Initialize execution state
+        execution_state = self._initialize_execution_state()
+
+        # 2. Run ReAct loop
+        for iteration in range(max_iterations):
+            print(f"\n=== ReAct Iteration {iteration + 1}/{max_iterations} ===")
+
+            result = self._run_react_iteration(execution_state, iteration)
+            if result:  # Task completed or failed
+                return result
+
+        # 3. Handle timeout
+        return self._create_result("timeout", execution_state,
+                                   error=f"Exceeded maximum iterations ({max_iterations})")
+
+    # === Core ReAct Logic ===
+
+    def _initialize_execution_state(self) -> ExecutionState:
+        """Initialize execution state from SharedContext"""
+        step_index = self.shared_context.current_task.get("step_index")
+        step = self.shared_context.current_plan.steps[step_index]
+
+        print(f"Executor: Executing step {step_index}: {step.description}")
+
+        return ExecutionState(
+            step=step.model_dump(),
+            step_index=step_index,
+            last_observation=f"Starting task: {step.description}"
+        )
+
+    def _run_react_iteration(self, execution_state: ExecutionState, iteration: int) -> StepExecutionResult | None:
+        """Run a single ReAct iteration. Returns result if completed/failed, None if should continue"""
+
+        # 1. Get LLM's thought and action plan (with previous action result for observation)
+        previous_action_result = getattr(execution_state, 'last_action_result', None) if iteration > 0 else None
+        react_response = self._get_react_response(execution_state, iteration, previous_action_result)
+
+        # 2. Record thinking process and observation
+        action_name = "completed" if react_response.is_final else react_response.action
+        execution_state.add_iteration(iteration + 1, react_response.thought, action_name)
+
+        # Update observation if provided by LLM
+        if react_response.observation:
+            execution_state.update_observation(react_response.observation)
+
+        # 3. Handle completion
+        if react_response.is_final:
+            final_result = react_response.action_input or {"message": "Task completed successfully"}
+            execution_state.add_tool_result(final_result)
+            return self._create_result("success", execution_state, iterations_used=iteration + 1)
+
+        # 4. Execute action and store result for next iteration
+        action_result: MetaToolResult = self._execute_action(react_response.action, react_response.action_input or {}, execution_state)
+        execution_state.add_tool_result(action_result.result)
+
+        # Store action result for next iteration's observation generation (convert to dict for serialization)
+        execution_state.last_action_result = action_result.model_dump()
+
+        # 5. Check for critical failure
+        if not action_result.success:
+            return self._create_result("failed", execution_state, error=action_result.error or "Action execution failed")
+
+        return None  # Continue iterations
+
+    def _get_react_response(self, execution_state: ExecutionState, iteration: int, previous_action_result: Dict[str, Any] = None) -> ReActResponse:
+        """Get LLM's ReAct response for current iteration"""
+
+        recent_trace = self.shared_context.process_trace[-3:]
+        context_section = f"""## Recent Execution History {json.dumps(recent_trace, indent=2)}"""
+        tools_section = self.meta_tools_description()
+
+        system_prompt = f"""
         You are an intelligent building compliance checker using the ReAct (Reasoning and Acting) framework.
         {context_section}
-        
+
         ## ReAct Framework Process
         For each task, follow this iterative cycle until completion:
 
@@ -83,169 +152,59 @@ class Executor:
         - Be specific about requirements when using tool creation or selection meta tools
         - Focus on systematic approach: search → select/create → execute → store (if new)
 
-        **Task Completion:**
-        - Mark the task as final when all required information has been gathered or processed
-        - Provide clear summary of accomplishments in final responses
-        
-        """.format(tools_section=tools_section)
-            
-    
-    def execute_step(self, 
-                    step: Dict[str, Any], 
-                    ifc_file_path: str,
-                    max_iterations: int = 5) -> Dict[str, Any]:
-       
-        # Get context information from shared context
-        context_info = None
-        if self.shared_context:
-            context_info = self.shared_context.get_context_for_agent("executor")
-       
-        # Initialize execution context
-        context = {
-            "step": step,
-            "ifc_file_path": ifc_file_path,
-            "history": [],
-        }
-        
-        # Initial state
-        current_state = {
-            "observation": f"Starting task: {step.get('description', 'Unknown task')}",
-            "completed": False,
-            "result": None
-        }
-        
-        # Keep track of tool execution results
-        tool_execution_results = []
-        
-        # ReAct loop
-        for iteration in range(max_iterations):
-            print(f"\n=== ReAct Iteration {iteration + 1}/{max_iterations} ===")
-            
-            # 1. Get LLM's thought and action plan (single call)
-            react_response = self._get_react_response(
-                step=step,
-                current_state=current_state,
-                history=context["history"],
-                iteration=iteration,
-                context=context,
-                context_info=context_info
-            )
-            
-            # 2. Check if completed first (Pydantic handles validation automatically)
-            if react_response.is_final:
-                # Record final thinking process
-                context["history"].append({
-                    "iteration": iteration + 1,
-                    "thought": react_response.thought,
-                    "action": "completed"
-                })
-                return self._create_success_result(
-                    step_id=step.get("step_id"),
-                    result=react_response.action_input or {"message": "Task completed successfully"},
-                    history=context["history"],
-                    iterations_used=iteration + 1,
-                    tool_results=tool_execution_results
-                )
-            
-            # 3. Record thinking process for non-final responses
-            context["history"].append({
-                "iteration": iteration + 1,
-                "thought": react_response.thought,
-                "action": react_response.action
-            })
-            
-            # 4. Execute action
-            action_result = self._execute_action(
-                action_name=react_response.action,
-                action_input=react_response.action_input or {},
-                context=context
-            )
-            
-            # Save tool execution result if successful
-            if action_result.get("success") and "result" in action_result:
-                tool_execution_results.append(action_result["result"])
-            
-            # 5. Update state
-            current_state = {
-                "observation": self._format_observation(action_result),
-                "last_action": react_response.action,
-                "last_result": action_result
-            }
-            
-            # 7. Check if early termination needed
-            if action_result.get("critical_failure", False):
-                return self._create_error_result(
-                    step_id=step.get("step_id"),
-                    error=action_result.get("error", "Critical failure"),
-                    history=context["history"],
-                    status="failed"
-                )
-        
-        # Reached maximum iterations
-        return self._create_timeout_result(
-            step_id=step.get("step_id"),
-            history=context["history"],
-            max_iterations=max_iterations
-        )
-    
-    def _get_react_response(self, 
-                           step: Dict[str, Any],
-                           current_state: Dict[str, Any],
-                           history: List[Dict[str, Any]],
-                           iteration: int,
-                           context: Dict[str, Any],
-                           context_info: Dict[str, Any] = None) -> ReActResponse:
-        
-        # Build history summary
-        history_summary = self._build_history_summary(history)
-        
-        prompt = f"""
-        Current Task: {step.get('description', 'Unknown')}
-        Task Type: {step.get('task_type', 'general')}
-        Expected Outcome: {step.get('expected_output', 'Complete the task successfully')}
-        Current Observation: {current_state.get('observation', 'No observation yet')}
-        Iteration: {iteration + 1}/5
-        Previous Actions Summary: {history_summary if history_summary else "This is the first action."}
-        IFC File Path: {context['ifc_file_path']}
+        **Observation Generation:**
+        - After each action execution, analyze the result and generate an observation
+        - Focus on what was accomplished, what data was gathered, and its significance for the task
+        - Connect the observation to the overall task objective
+        - Be specific about success/failure and next steps implications
 
-        Based on the current situation, what should be the next action? 
-        Remember to think step by step and choose the most appropriate tool from the available tools.
-        
-        IMPORTANT: 
-        - If the task is complete, set is_final=True and omit action/action_input fields
-        - Otherwise, provide thought, action (exact tool name), and action_input (tool parameters)
+        **Task Completion:**
+        - Set is_final=True when all required information has been gathered or processed
+        - When not final: provide thought, action (exact tool name), and action_input (tool parameters)
+        - When action result is available: also provide observation analyzing the result
+        - In final responses: provide clear summary of accomplishments
         """
-                
+
+        # Include previous action result for observation generation
+        action_result_section = ""
+        if previous_action_result:
+            action_result_section = f"""
+        Previous Action Result: {json.dumps(previous_action_result, indent=2)}
+        """
+
+        prompt = f"""
+        Current Task: {execution_state.step['description']}
+        Task Type: {execution_state.step['task_type']}
+        Expected Outcome: {execution_state.step['expected_output']}
+        Current Observation: {execution_state.last_observation}
+        Iteration: {iteration + 1}/5
+        {action_result_section}
+        Based on the current situation, what should be the next action?
+        Remember to think step by step and choose the most appropriate tool from the available tools.
+        """
+
         try:
-            # Build system prompt with context information
-            system_prompt = self._build_react_system_prompt(context_info)
-            
             response = self.llm_client.generate_response(
-                prompt, 
-                system_prompt, 
+                prompt,
+                system_prompt,
                 response_model=ReActResponse
             )
             return response
         except Exception as e:
             print(f"LLM call failed: {e}")
             raise RuntimeError(f"ReAct LLM call failed: {e}") from e
-    
-    
-    def _execute_action(self, 
-                       action_name: str, 
-                       action_input: Dict[str, Any],
-                       context: Dict[str, Any]) -> Dict[str, Any]:
-        
-        if action_name == "final_answer":
-            return {"success": True, "result": action_input, "is_final": True}
-        
+
+
+    def _execute_action(self, action_name: str, action_input: Dict[str, Any]) -> MetaToolResult:
+        """Execute the selected meta tool"""
+
         try:
             # Prepare parameters for meta tool
             tool_params = action_input.copy()
-            # Add context for meta tools that may need it
-            if "ifc_file_path" in context:
-                tool_params["execution_context"] = json.dumps({"ifc_file_path": context["ifc_file_path"]})
-            
+            # Add execution context for meta tools
+            ifc_file_path = self.shared_context.session_info.get("ifc_file_path", "")
+            tool_params["execution_context"] = json.dumps({"ifc_file_path": ifc_file_path})
+
             # Execute meta tool using ToolRegistry native API
             tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
             tool_call = {
@@ -253,195 +212,83 @@ class Executor:
                 "type": "function",
                 "function": {"name": action_name, "arguments": json.dumps(tool_params)}
             }
-            
+
             tool_responses = self.meta_tool_registry.execute_tool_calls([tool_call])
             result = tool_responses.get(tool_call_id)
-            
+
             if result is None:
-                return {"success": False, "error": f"No result from meta tool {action_name}", "tool_name": action_name}
-            
-            # Meta tools return JSON strings - parse them
-            if isinstance(result, str):
-                try:
-                    parsed_result = json.loads(result)
-                    return {
-                        "success": parsed_result.get("success", False),
-                        "result": parsed_result,
-                        "tool_name": action_name,
-                        "is_meta_tool": True
-                    }
-                except json.JSONDecodeError:
-                    return {
-                        "success": False,
-                        "result": result,
-                        "tool_name": action_name,
-                        "error": "Failed to parse meta tool JSON response"
-                    }
-            
-            return {
-                "success": True,
-                "tool_name": action_name,
-                "result": result,
-                "is_meta_tool": True
-            }
-            
+                return MetaToolResult(
+                    success=False,
+                    tool_name=action_name,
+                    error=f"No result from meta tool {action_name}"
+                )
+
+            # Return MetaToolResult directly
+            if isinstance(result, MetaToolResult):
+                return result
+
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Meta tool execution failed: {str(e)}",
-                "tool_name": action_name,
-                "critical_failure": "critical" in str(e).lower()
-            }
-    
-    
-    
-    
-    def _format_observation(self, action_result: Dict[str, Any]) -> str:
-        """Format action result as observation description"""
-        if action_result.get("success"):
-            tool_name = action_result.get("tool_name", "unknown tool")
-            result = action_result.get("result", {})
-            
-            # Generate result summary
-            if isinstance(result, dict):
-                if "summary" in result:
-                    result_summary = result["summary"]
-                else:
-                    # Extract key information
-                    key_info = []
-                    for k, v in result.items():
-                        if k in ["status", "count", "value", "measurement", "compliant"]:
-                            key_info.append(f"{k}={v}")
-                    result_summary = ", ".join(key_info) if key_info else str(result)[:100]
-            else:
-                result_summary = str(result)[:100]
-                
-            return f"Successfully executed {tool_name}. Result: {result_summary}"
-        else:
-            error = action_result.get("error", "Unknown error")
-            return f"Action failed: {error}"
-    
-    def _build_history_summary(self, history: List[Dict[str, Any]]) -> str:
-        """Build history summary"""
-        if not history:
-            return ""
-        
-        summaries = []
-        for h in history[-3:]:  # Only show last 3 actions
-            summaries.append(
-                f"Step {h['iteration']}: {h['action']} - {h['thought'][:100]}..."
+            return MetaToolResult(
+                success=False,
+                tool_name=action_name,
+                error=f"Meta tool execution failed: {str(e)}"
             )
-        
-        return "\n".join(summaries)
-    
-    
-    # === Result creation methods ===
-    
-    def _create_success_result(self, step_id: str, result: Any, history: List, iterations_used: int, tool_results: List = None) -> Dict[str, Any]:
-        success_result = {
-            "status": "success",
-            "step_id": step_id,
-            "result": result,
-            "iterations_used": iterations_used,
-            "execution_history": history
-        }
-        
-        # Add tool execution results if available
-        if tool_results:
-            success_result["tool_results"] = tool_results
-            # If we have tool results, use the last one as primary result for backward compatibility
-            if tool_results:
-                success_result["primary_tool_result"] = tool_results[-1]
-        
-        return success_result
-    
-    def _create_error_result(self, step_id: str, error: str, history: List = None, status: str = "error") -> Dict[str, Any]:
-        """Create error/failure result"""
-        result = {
-            "status": status,
-            "step_id": step_id,
-            "error": error
-        }
-        
-        # Add execution history if provided
-        if history is not None:
-            result["execution_history"] = history
-            
-        return result
-    
-    def _create_timeout_result(self, step_id: str, history: List, max_iterations: int) -> Dict[str, Any]:
-        """Create timeout result"""
-        return {
-            "status": "timeout",
-            "step_id": step_id,
-            "error": f"Exceeded maximum iterations ({max_iterations})",
-            "execution_history": history
-        }
-    
-    def execute_single_step(self, step: Dict[str, Any], ifc_file_path: str, step_id: int) -> Dict[str, Any]:
-        """
-        Execute single step using ReAct loop - delegates tool selection to ReAct
-        
-        Args:
-            step: Single step from plan
-            ifc_file_path: Path to IFC file
-            step_id: Id of step in plan
 
-        Returns:
-            Dict: Step execution result with step_status field
-        """
-        step_description = step.get('description', 'Unknown')
-        print(f"Executor: Executing single step {step_id}: {step_description}")
-        
-        try:
-            # Execute with ReAct loop - let LLM decide which meta tools to use
-            result = self.execute_step(step, ifc_file_path)
-            return self._map_execution_result(result, step_id, "react_execution")
-            
-        except Exception as e:
-            print(f"Executor: Single step execution failed with exception: {e}")
-            return {
-                "step_status": "failed",
-                "failure_reason": "exception", 
-                "error_message": str(e),
-                "status": "error"
-            }
-    
-    
-    
-    
-    def get_execution_context(self) -> Dict[str, Any]:
-        """Get execution context from shared context"""
-        if self.shared_context:
-            return self.shared_context.get_context_for_agent("executor")
-        return {}
+    # === Result Handling ===
 
-    def _map_execution_result(self, result: Dict[str, Any], step_id: int, execution_type: str) -> Dict[str, Any]:
-        """Map execution result to coordinator-compatible format"""
-        mapped_result = result.copy()
-        mapped_result["execution_type"] = execution_type
-        
-        if result.get("status") == "success":
-            mapped_result["step_status"] = "success"
-            mapped_result["step_result"] = result.get("result", {})
-        elif result.get("status") == "timeout":
-            mapped_result["step_status"] = "failed"
-            mapped_result["failure_reason"] = "timeout"
-            mapped_result["error_message"] = result.get("error", "Step execution timeout")
-        else:
-            mapped_result["step_status"] = "failed" 
-            mapped_result["failure_reason"] = "execution_failure"
-            mapped_result["error_message"] = result.get("error", "Step execution failed")
-        
-        return mapped_result
-    
+    def _create_result(self, status: str, execution_state: ExecutionState, **kwargs) -> StepExecutionResult:
+        """Unified result creation that returns typed result format"""
 
-    def get_execution_history(self) -> List[Dict[str, Any]]:
-        """
-        Get execution history for compatibility with coordinator
-        
-        Returns:
-            List: Execution history records
-        """
-        return self.execution_history.copy()
+        return StepExecutionResult(
+            status=status,
+            step_index=execution_state.step_index,
+            execution_history=execution_state.history,
+            iterations_used=kwargs.get("iterations_used"),
+            tool_results=execution_state.tool_results,
+            error=kwargs.get("error")
+        )
 
+
+    # === Utility Methods ===
+
+    @staticmethod
+    def meta_tools_description() -> str:
+        """Get meta tools description for ReAct system prompt"""
+        return """Available meta tools:
+
+        ### tool_selection
+        - **Description**: Search and select the best domain tool for a given task using semantic search and LLM reasoning
+        - **Parameters**:
+        - step_description (string) (required): Clear description of the task or step that needs a domain tool
+        - execution_context (string) (optional): JSON context containing execution details like ifc_file_path
+
+        ### tool_creation
+        - **Description**: Create a new domain tool when no existing tool can handle the current task
+        - **Parameters**:
+        - step_description (string) (required): Detailed description of what the new tool should accomplish
+        - step_id (string) (optional): Identifier for the step, defaults to "auto_generated"
+
+        ### tool_execution
+        - **Description**: Execute a specific domain tool with given parameters for building compliance tasks
+        - **Parameters**:
+        - tool_name (string) (required): Name of the domain tool to execute
+        - parameters (string) (required): JSON string of parameters required by the domain tool
+        - execution_context (string) (optional): JSON context with ifc_file_path and other execution details
+
+        ### tool_registration
+        - **Description**: Register a newly created tool to the domain tool registry for future use
+        - **Parameters**:
+        - tool_code (string) (required): Complete source code of the tool function to register
+        - tool_name (string) (required): Name of the tool to register
+        - metadata (string) (optional): JSON metadata including description and category, defaults to "{}"
+
+        ### tool_storage
+        - **Description**: Store a tool for future use with metadata and semantic search capabilities
+        - **Parameters**:
+        - tool_name (string) (required): Name of the tool to store
+        - code (string) (required): Source code of the tool to store
+        - description (string) (optional): Description of what the tool does
+        - category (string) (optional): Category classification, defaults to "general"
+        - tags (string) (optional): Comma-separated tags for searchability, defaults to ""
+
+        """
