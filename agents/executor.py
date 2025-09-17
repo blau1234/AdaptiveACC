@@ -5,9 +5,9 @@ from utils.llm_client import LLMClient
 from meta_tools.meta_tool_registry import MetaToolRegistry
 from meta_tools.tool_selection import ToolSelection
 from meta_tools.tool_execution import ToolExecution
-from meta_tools.tool_registration import ToolRegistration
 from meta_tools.tool_storage import ToolStorage
-from meta_tools.tool_creation.tool_creator import ToolCreation
+from meta_tools.tool_creation_and_fix.tool_fix import ToolFix
+from meta_tools.tool_creation_and_fix.tool_creation import ToolCreation
 from models.common_models import ReActResponse, ExecutionState, StepExecutionResult, MetaToolResult
 from models.shared_context import SharedContext
 
@@ -26,11 +26,11 @@ class Executor:
 
     def _register_required_tools(self):
         tools_to_register = [
-            ToolSelection().tool_selection,
+            ToolSelection().select_best_tool,
             ToolCreation().tool_creation,
             ToolExecution().tool_execution,
-            ToolRegistration().tool_registration,
-            ToolStorage().tool_storage
+            ToolStorage().tool_storage,
+            ToolFix().tool_fix
         ]
 
         for tool_func in tools_to_register:
@@ -65,15 +65,16 @@ class Executor:
     def _initialize_execution_state(self) -> ExecutionState:
         """Initialize execution state from SharedContext"""
         step_index = self.shared_context.current_task.get("step_index")
-        step = self.shared_context.current_plan.steps[step_index]
+        step = self.shared_context.current_task.get("step")
 
-        print(f"Executor: Executing step {step_index}: {step.description}")
+        print(f"Executor: Executing step {step_index}: {step['description']}")
 
         return ExecutionState(
-            step=step.model_dump(),
+            step=step,
             step_index=step_index,
-            last_observation=f"Starting task: {step.description}"
+            last_observation=f"Starting task: {step['description']}"
         )
+
 
     def _run_react_iteration(self, execution_state: ExecutionState, iteration: int) -> StepExecutionResult | None:
         """Run a single ReAct iteration. Returns result if completed/failed, None if should continue"""
@@ -138,7 +139,6 @@ class Executor:
         - Use `tool_selection` to find appropriate domain tools for your task
         - Use `tool_creation` when no existing domain tool can handle your requirements
         - Use `tool_execution` to run specific domain tools you've identified
-        - Use `tool_registration` to register newly created tools
         - Use `tool_storage` to persistently store tools for future use
 
         **Error Handling:**
@@ -201,9 +201,15 @@ class Executor:
         try:
             # Prepare parameters for meta tool
             tool_params = action_input.copy()
-            # Add execution context for meta tools
-            ifc_file_path = self.shared_context.session_info.get("ifc_file_path", "")
-            tool_params["execution_context"] = json.dumps({"ifc_file_path": ifc_file_path})
+
+            # Special handling for tools that get context from SharedContext
+            if action_name == "select_best_tool":
+                # select_best_tool doesn't need any parameters - it gets everything from SharedContext
+                tool_params = {}
+            else:
+                # Add execution context for other meta tools
+                ifc_file_path = self.shared_context.session_info.get("ifc_file_path", "")
+                tool_params["execution_context"] = json.dumps({"ifc_file_path": ifc_file_path})
 
             # Execute meta tool using ToolRegistry native API
             tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
@@ -269,26 +275,16 @@ class Executor:
         - step_id (string) (optional): Identifier for the step, defaults to "auto_generated"
 
         ### tool_execution
-        - **Description**: Execute a specific domain tool with given parameters for building compliance tasks
+        - **Description**: Execute a domain tool with specified execution mode
         - **Parameters**:
         - tool_name (string) (required): Name of the domain tool to execute
-        - parameters (string) (required): JSON string of parameters required by the domain tool
-        - execution_context (string) (optional): JSON context with ifc_file_path and other execution details
+        - parameters (string) (required): JSON string of all parameters required by the tool
+        - execution_mode (string) (optional): "safe" for existing tools (default), "sandbox" for newly created tools
 
-        ### tool_registration
-        - **Description**: Register a newly created tool to the domain tool registry for future use
-        - **Parameters**:
-        - tool_code (string) (required): Complete source code of the tool function to register
-        - tool_name (string) (required): Name of the tool to register
-        - metadata (string) (optional): JSON metadata including description and category, defaults to "{}"
 
         ### tool_storage
-        - **Description**: Store a tool for future use with metadata and semantic search capabilities
+        - **Description**: Store a validated tool from SharedContext for future use with filesystem and vector database persistence
         - **Parameters**:
-        - tool_name (string) (required): Name of the tool to store
-        - code (string) (required): Source code of the tool to store
-        - description (string) (optional): Description of what the tool does
-        - category (string) (optional): Category classification, defaults to "general"
-        - tags (string) (optional): Comma-separated tags for searchability, defaults to ""
+        - tool_name (string) (required): Name of the tool to store from recent creation/fix results
 
         """

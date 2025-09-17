@@ -11,13 +11,21 @@ import uvicorn
 # Import configuration and agents
 from config import Config
 from agents.coordinator import AgentCoordinator
+from admin.tool_manager import ToolManager
+
+# Import telemetry
+from telemetry import init_tracing
 
 # Import Pydantic models
 from models.api_models import (
-    ComplianceCheckRequest, 
-    ComplianceCheckResponse, 
+    ComplianceCheckRequest,
+    ComplianceCheckResponse,
     HealthCheckResponse,
-    ErrorResponse
+    ErrorResponse,
+    ToolListResponse,
+    ToolDeletionResponse,
+    ToolStorageStats,
+    ToolInfo
 )
 
 # Global variables to store system components
@@ -27,10 +35,21 @@ coordinator = None
 def initialize_system():
     """Initialize system components"""
     try:
+        # Initialize Phoenix tracing if enabled
+        if Config.PHOENIX_ENABLED:
+            print("Initializing Phoenix tracing...")
+            tracer_provider = init_tracing()
+            if tracer_provider:
+                print(f"Note: Traces will be sent to {Config.PHOENIX_ENDPOINT}")
+            else:
+                print("Phoenix tracing initialization failed, continuing without tracing")
+        else:
+            print("Phoenix tracing disabled in configuration")
+        
         # Validate configuration
         Config.validate()
         
-        # Initialize agent coordinator (with Planner, Executor and Checker)
+        # Initialize agent coordinator
         coordinator = AgentCoordinator()
         
         return coordinator
@@ -112,133 +131,13 @@ async def check_compliance(
         except:
             pass
         
-        # Return only the final report as requested
-        print(f"DEBUG: coordinator returned keys: {list(coordination_result.keys())}")  # Debug 1
-        final_report = coordination_result.get("final_report", {})
-        print(f"DEBUG: final_report keys: {list(final_report.keys()) if final_report else 'Empty'}")  # Debug 2
-        print(f"DEBUG: Returning structured response with report")  # Debug 3
-        return ComplianceCheckResponse(report=final_report)
+        # Return process trace as the complete compliance report
+        print(f"DEBUG: coordinator returned process trace with {len(coordination_result)} records")
+        return ComplianceCheckResponse(report={"process_trace": coordination_result})
         
     except Exception as e:
         print(f"Error during check process: {e}")
         raise HTTPException(status_code=500, detail=f"Check failed: {str(e)}")
-
-@app.post("/preview-ifc")
-async def preview_ifc(ifc_file: UploadFile = File(..., description="IFC file for preview")):
-    """Extract basic geometry information from IFC file for 3D preview - fixed"""
-    try:
-        # Validate file type
-        if not ifc_file.filename.lower().endswith('.ifc'):
-            raise HTTPException(status_code=400, detail="Only IFC file format is supported")
-        
-        # Save file temporarily 
-        file_path = os.path.join(Config.UPLOAD_DIR, f"preview_{ifc_file.filename}")
-        with open(file_path, "wb") as buffer:
-            content = await ifc_file.read()
-            buffer.write(content)
-        
-        # Parse IFC file using our existing parser
-        from utils.ifc_parser import IFCParser
-        parser = IFCParser()
-        parser.load_file(file_path)
-        
-        # Extract building elements by type
-        element_types = ['IfcWall', 'IfcDoor', 'IfcWindow', 'IfcSlab', 'IfcBeam', 'IfcColumn', 'IfcRoof', 'IfcStair']
-        all_elements = []
-        
-        for element_type in element_types:
-            elements = parser.get_elements_by_type(element_type)
-            all_elements.extend(elements)
-        
-        # Convert to simple geometry data for frontend
-        geometry_data = {
-            "elements": [],
-            "bounds": {"min": {"x": 0, "y": 0, "z": 0}, "max": {"x": 10, "y": 10, "z": 10}}
-        }
-        
-        for i, element in enumerate(all_elements):
-            # Extract basic properties
-            element_type = element.is_a()
-            element_name = getattr(element, 'Name', f'Unnamed {element_type}')
-            element_id = getattr(element, 'GlobalId', f'ID_{i}')
-            
-            # Create simplified geometry (since we don't have real geometry extraction)
-            # Use index-based positioning for demonstration
-            x_pos = (i % 5) * 5
-            y_pos = 0
-            z_pos = (i // 5) * 3
-            
-            elem_data = {
-                "type": element_type,
-                "id": element_id,
-                "name": element_name,
-                "geometry": {
-                    "type": "box",
-                    "dimensions": get_element_dimensions(element_type),
-                    "position": [x_pos, y_pos, z_pos],
-                    "color": get_element_color(element_type)
-                }
-            }
-            geometry_data["elements"].append(elem_data)
-        
-        # Calculate bounds
-        if geometry_data["elements"]:
-            positions = [elem["geometry"]["position"] for elem in geometry_data["elements"]]
-            dimensions = [elem["geometry"]["dimensions"] for elem in geometry_data["elements"]]
-            
-            min_x = min(pos[0] - dim[0]/2 for pos, dim in zip(positions, dimensions))
-            max_x = max(pos[0] + dim[0]/2 for pos, dim in zip(positions, dimensions))
-            min_y = min(pos[1] - dim[1]/2 for pos, dim in zip(positions, dimensions))
-            max_y = max(pos[1] + dim[1]/2 for pos, dim in zip(positions, dimensions))
-            min_z = min(pos[2] - dim[2]/2 for pos, dim in zip(positions, dimensions))
-            max_z = max(pos[2] + dim[2]/2 for pos, dim in zip(positions, dimensions))
-            
-            geometry_data["bounds"] = {
-                "min": {"x": min_x, "y": min_y, "z": min_z},
-                "max": {"x": max_x, "y": max_y, "z": max_z}
-            }
-        
-        # Clean up temporary file
-        try:
-            os.remove(file_path)
-        except:
-            pass
-            
-        return geometry_data
-        
-    except Exception as e:
-        print(f"Error in IFC preview: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to preview IFC file: {str(e)}")
-
-def get_element_color(element_type):
-    """Get color for different element types"""
-    colors = {
-        "IFCWALL": 0xCCCCCC,
-        "IFCDOOR": 0x8B4513,
-        "IFCWINDOW": 0x87CEEB,
-        "IFCSLAB": 0xDEB887,
-        "IFCBEAM": 0x696969,
-        "IFCCOLUMN": 0x696969,
-        "IFCROOF": 0x8B0000,
-        "IFCSTAIR": 0xA0A0A0,
-        "IFCRAILING": 0x000000
-    }
-    return colors.get(element_type, 0x808080)
-
-def get_element_dimensions(element_type):
-    """Get default dimensions for different element types"""
-    dimensions = {
-        "IFCWALL": [4, 3, 0.2],      # width, height, thickness
-        "IFCDOOR": [2, 2.5, 0.1],    # width, height, thickness
-        "IFCWINDOW": [1.5, 1.5, 0.1], # width, height, thickness
-        "IFCSLAB": [5, 0.3, 5],      # width, thickness, depth
-        "IFCBEAM": [0.3, 0.5, 4],    # width, height, length
-        "IFCCOLUMN": [0.3, 3, 0.3],  # width, height, depth
-        "IFCROOF": [6, 0.3, 6],      # width, thickness, depth
-        "IFCSTAIR": [3, 0.2, 1],     # width, step height, depth
-        "IFCRAILING": [2, 1, 0.1]    # width, height, thickness
-    }
-    return dimensions.get(element_type, [1, 1, 1])
 
 @app.get("/health", response_model=HealthCheckResponse)
 async def health_check():
@@ -250,10 +149,65 @@ async def health_check():
         components={
             "coordinator": "ready",
             "planner": "ready",
-            "executor": "ready", 
+            "executor": "ready",
             "checker": "ready"
         }
     )
+
+
+# ===== Admin Management Endpoints =====
+
+@app.get("/admin/tools", response_model=ToolListResponse, tags=["admin"])
+async def list_tools(category: Optional[str] = None):
+    """List all stored domain tools, optionally filtered by category"""
+    try:
+        tool_manager = ToolManager()
+        tools_data = tool_manager.list_stored_tools(category)
+
+        # Convert to ToolInfo objects
+        tools = [ToolInfo(**tool_data) for tool_data in tools_data]
+
+        return ToolListResponse(
+            tools=tools,
+            total_count=len(tools),
+            category_filter=category
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list tools: {str(e)}")
+
+
+@app.delete("/admin/tools/{tool_name}", response_model=ToolDeletionResponse, tags=["admin"])
+async def delete_tool(tool_name: str):
+    """Delete a specific domain tool"""
+    try:
+        tool_manager = ToolManager()
+        result = tool_manager.delete_tool(tool_name)
+
+        if not result["success"]:
+            raise HTTPException(status_code=404, detail=result["message"])
+
+        return ToolDeletionResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete tool: {str(e)}")
+
+
+@app.get("/admin/tools/stats", response_model=ToolStorageStats, tags=["admin"])
+async def get_tool_stats():
+    """Get statistics about stored domain tools"""
+    try:
+        tool_manager = ToolManager()
+        stats = tool_manager.get_storage_stats()
+
+        if "error" in stats:
+            raise HTTPException(status_code=500, detail=stats["error"])
+
+        return ToolStorageStats(**stats)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get tool stats: {str(e)}")
 
 if __name__ == "__main__":
     # Start server

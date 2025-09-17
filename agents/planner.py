@@ -1,20 +1,18 @@
 import json
 from typing import Dict, List, Any
 from utils.llm_client import LLMClient
-from data_models.shared_models import PlanModel, RegulationAnalysis, StepModel, ModifiedPlan
-from shared_context import SharedContext
+from models.common_models import PlanModel, RegulationAnalysis, StepModel
+from models.shared_context import SharedContext
 
 class Planner:
 
-    def __init__(self, shared_context: SharedContext = None):
+    def __init__(self):
         self.llm_client = LLMClient()
-        self.shared_context = shared_context
-        # Remove conversation_history as it's now in shared context
-    
-    def generate_initial_plan(self) -> Dict[str, Any]:
+        self.shared_context = SharedContext.get_instance()
+   
+    def generate_initial_plan(self) -> PlanModel:
         """Generate initial plan using regulation text from shared context"""
         try:
-            print("Planner: Analyzing regulation text and generating initial plan...")
             
             # Get regulation text from shared context
             if not self.shared_context:
@@ -28,58 +26,28 @@ class Planner:
             regulation_analysis = self._analyze_regulation(regulation_text)
             
             # Generate structured plan
-            plan_steps = self._generate_plan_steps(regulation_analysis, regulation_text)
-            
-            # Convert StepModel objects to dict format for compatibility
-            steps_dict = [step.model_dump() for step in plan_steps]
-            
-            plan = {
-                "plan_id": self._generate_plan_id(),
-                "regulation_summary": regulation_analysis.summary,
-                "steps": steps_dict,
-                "modification_count": 0
-            }
-            
-            print(f"Planner: Generated initial plan with {len(plan_steps)} steps")
+            plan = self._generate_plan(regulation_analysis)
+
+            print(f"Planner: Generated initial plan with {len(plan.steps)} steps")
             return plan
             
         except Exception as e:
             print(f"Planner: Failed to generate initial plan: {e}")
             raise RuntimeError(f"Plan generation failed: {e}") from e
     
-    def modify_plan(self, current_plan: Dict[str, Any], feedback: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Modify plan based on executor feedback using LLM
-        
-        Args:
-            current_plan: Current execution plan
-            feedback: Feedback from executor
-            
-        Returns:
-            Dict: Modified plan
-        """
+
+    def generate_modified_plan(self) -> PlanModel:
+        """Modify existing plan based on execution history in shared context"""
+
         try:
-            print(f"Planner: Received feedback from Executor: {feedback.get('issue_type', 'unknown')}")
-            
-            # Get execution context from shared context for better plan modification
-            context_info = None
-            if self.shared_context:
-                context_info = self.shared_context.get_context_for_agent("planner")
-            
-            # Use LLM to dynamically modify the plan based on feedback
-            modified_plan = self._llm_modify_plan(current_plan, feedback, context_info)
-            
-            # Update plan metadata
-            modified_plan["status"] = "modified"
-            modified_plan["modification_count"] = current_plan.get("modification_count", 0) + 1
-            modified_plan["last_modified"] = self._get_timestamp()
-            modified_plan["modification_reason"] = feedback.get("issue_description", "Unknown issue")
-            
-            # Planning history is now managed in shared context by coordinator
-            
-            print(f"Planner: Plan modified (modification #{modified_plan['modification_count']})")
-            
-            
+            # Get execution context from shared context
+            process_trace = self.shared_context.process_trace
+
+            # Use LLM to dynamically modify the plan based on execution history
+            modified_plan = self._modify_plan(process_trace)
+
+            print(f"Planner: Plan modified based on execution history")
+
             return modified_plan
             
         except Exception as e:
@@ -87,144 +55,142 @@ class Planner:
             raise RuntimeError(f"Plan modification failed: {e}") from e
     
     def _analyze_regulation(self, regulation_text: str) -> RegulationAnalysis:
-        """Analyze regulation text to extract key requirements"""
-        system_prompt = """You are a building code regulation analysis expert.
+        """Analyze regulation text to extract comprehensive compliance checking information"""
         
-        Analyze the regulation text and extract:
-        1. Main compliance requirements
-        2. Technical specifications
-        3. Measurable criteria
-        4. Potential check points
-        
-        Provide comprehensive analysis with clear requirement identification."""
-        
-        prompt = f""" 
-        Please analyze this building regulation text: {regulation_text}
-        """
-        
+        system_prompt = """You are a building code regulation analysis expert specializing in IFC-based compliance checking.
+        Perform comprehensive analysis to extract all necessary information for automated building compliance verification:
+
+        ## Analysis Framework:
+        1. **Core Information**:
+           - Create a concise summary of the regulation's main requirements
+           - Identify the specific scope (e.g., means of egress, accessibility, structural)
+
+        2. **Applicability Analysis**:
+           - Determine when this regulation applies (building type, occupancy, element type, etc.)
+           - Extract any conditional requirements or thresholds
+
+        3. **IFC Mapping**:
+           - Identify target IFC entities that need to be checked (e.g., IfcDoor, IfcStair, IfcWall, IfcSpace, IfcBeam)
+           - List required IFC attributes/properties for verification (e.g., Height, Width, Material, FireRating)
+
+        4. **Compliance Logic**:
+           - Classify the check type: e.g. "existence", "comparison", "range", "relation", "geometry", or "aggregation"
+           - Extract logical conditions as measurable criteria (e.g., "width >= 800mm", "height <= 2100mm")
+
+        5. **Regulatory Context**:
+           - Identify references to other regulations or standards this depends on
+           - Note any exceptions, exemptions, or special cases mentioned
+
+        ## Common IFC Entities:
+        IfcDoor, IfcWindow, IfcWall, IfcStair, IfcRamp, IfcSpace, IfcBeam, IfcColumn, IfcSlab, IfcRailing
+
+        ## Example Check Types:
+        - existence: Verify element exists
+        - comparison: Compare value to threshold (>, <, =)
+        - range: Check if value falls within range
+        - relation: Check relationships between elements
+        - geometry: Verify geometric properties
+        - aggregation: Check counts or totals
+
+        Provide detailed, structured analysis suitable for automated compliance checking."""
+
+        prompt = f"""Analyze this building regulation text for automated compliance checking:
+
+        REGULATION TEXT:
+        {regulation_text}
+
+        Extract all information needed to implement automated IFC-based compliance verification."""
+
         return self.llm_client.generate_response(
-            prompt, 
+            prompt,
             system_prompt,
             response_model=RegulationAnalysis
         )
     
-    def _generate_plan_steps(self, regulation_analysis: RegulationAnalysis, regulation_text: str) -> List[StepModel]:
+    def _generate_plan(self, regulation_analysis: RegulationAnalysis) -> PlanModel:
         """Generate structured plan steps based on regulation analysis"""
 
         system_prompt = """You are a building compliance plan generator.
-        
         Based on the regulation analysis, create a step-by-step execution plan.
-        Each step should be actionable and specific.
-        Only include intermediate information extraction steps.
-        Do **not** include any comparison, final summary or overall validation step.
+        
+        ## Step Design Principles:
+        - Break complex operations into multiple simple steps
+        - Ensure clear data flow between steps
+        - Each step must be atomic - completable by one tool in one execution
+        - Avoid steps that require multiple tool calls or complex coordination
+        - Only include intermediate information extraction steps. 
+        - Do **not** include any comparison, final summary or overall validation step.
 
-        For each step, provide:
-        - Clear step identifier 
-        - Detailed description of what to check/measure
-        - Priority level based on regulation importance
-        - Task type (measurement, analysis, etc.)
-        - Expected output format
-        - Any dependencies on other steps
-        - Tool requirements if specific tools are needed"""
+
+        For each step, provide these exact fields:
+        - **description**: Clear, specific action that one tool can perform (e.g., "Extract height measurements from IfcDoor elements")
+        - **task_type**: Type of operation (e.g., "measurement", "extraction", "parsing", "analysis", "validation")
+        - **inputs**: Step-specific parameters needed (e.g., {"element_type": "IfcDoor", "property": "Height"})
+        - **expected_output**: Precise format of results (e.g., "List of door heights in millimeters")
+        """
         
         prompt = f"""
         Regulation Analysis: {regulation_analysis.model_dump_json(indent=2)}
-        Original Regulation: {regulation_text}
         Generate a detailed execution plan with actionable steps:
         """
-        
+    
         return self.llm_client.generate_response(
             prompt, 
             system_prompt,
-            response_model=List[StepModel]
+            response_model=PlanModel
         )
     
-    def _llm_modify_plan(self, current_plan: Dict[str, Any], feedback: Dict[str, Any], context_info: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Use LLM to dynamically modify plan based on feedback
+    def _modify_plan(self, process_trace: List[Dict[str, Any]]) -> PlanModel:
+        """Use LLM to intelligently modify the current plan based on executor feedback"""
         
-        Args:
-            current_plan: Current execution plan
-            feedback: Feedback from executor
-            
-        Returns:
-            Dict: Modified plan
-        """
-        system_prompt = """You are an expert building compliance plan modifier.
-        
-        Based on the executor feedback, intelligently modify the current plan to address the issues.
-        You can:
-        1. Modify existing steps (change description, tools, approach)
-        2. Add new prerequisite steps
-        3. Remove or skip problematic steps
-        4. Reorganize step order
-        5. Split complex steps into simpler ones
-        6. Combine simple steps if appropriate
-        
-        Focus on creating actionable, specific steps with clear:
-        - Step identifiers
-        - Detailed descriptions
-        - Appropriate task types
-        - Priority levels
-        - Expected outputs
-        - Tool requirements
-        - Dependencies between steps
-        
-        Address the specific issues mentioned in the feedback."""
-        
-        # Include execution context if available
-        execution_context_str = ""
-        if context_info and context_info.get("relevant_history"):
-            execution_context_str = f"""
-        EXECUTION HISTORY (for context):
-        {json.dumps(context_info['relevant_history'][:5], indent=2)}
-        """
+        system_prompt = """You are an expert building compliance plan modifier. Your role is to intelligently adapt execution plans based on process trace analysis.
 
-        prompt = f"""
-        CURRENT PLAN:
-        {json.dumps(current_plan, indent=2)}
-        
-        EXECUTOR FEEDBACK:
-        - Issue Type: {feedback.get('issue_type', 'unknown')}
-        - Issue Description: {feedback.get('issue_description', 'No description')}
-        - Failed Step: {json.dumps(feedback.get('failed_step', {}), indent=2)}
-        - Step Index: {feedback.get('step_index', 'unknown')}
-        - Error Message: {feedback.get('error_message', 'No error message')}
-        - Execution Context: {json.dumps(feedback.get('execution_context', {}), indent=2)}
-        {execution_context_str}
-        
-        Please analyze the feedback and modify the plan to address the issues. 
-        Be smart and practical - if a tool failed, suggest alternatives. 
-        If information is missing, add steps to gather it.
-        If a step is unclear, clarify or break it down.
-        Consider the execution history to avoid repeating past mistakes.
+        ## Core Capabilities
+        - Extract and analyze current plan from process trace history
+        - Identify failure patterns and root causes from execution results
+        - Generate optimized plan modifications using proven strategies
+
+        ## Step Design Principles:
+        - Break complex operations into multiple simple steps
+        - Ensure clear data flow between steps
+        - Each step must be atomic - completable by one tool in one execution
+        - Avoid steps that require multiple tool calls or complex coordination
+        - Only include intermediate information extraction steps. 
+        - Do **not** include any comparison, final summary or overall validation step.
+
+        ## Plan Structure Requirements
+        Each step must conform to PlanModel with these exact fields:
+        - **description**: Clear, specific action (e.g., "Extract height measurements from IfcDoor elements")
+        - **task_type**: Operation type (measurement, extraction, parsing, analysis, validation)
+        - **inputs**: Step-specific parameters (e.g., {"element_type": "IfcDoor", "property": "Height"})
+        - **expected_output**: Precise result format (e.g., "List of door heights in millimeters")
+
+        ## Modification Strategies by Error Type
+        **execution_failure**: Alternative tools/approaches, break into simpler sub-steps, add prerequisites
+        **timeout**: Reduce scope, add checkpoints, split large operations
+        **tool_missing**: Suggest alternatives, add tool creation steps, modify requirements
         """
+        
+        prompt = f"""
+        PROCESS TRACE DATA:
+        {json.dumps(process_trace[-10:], indent=2)}
+
+        TASK: Create a modified plan based on the execution history above.
+
+        INSTRUCTIONS:
+        1. Extract the current plan (look for 'initial_plan' or 'revised_plan' in key_data)
+        2. Identify the specific failure from step execution results
+        3. Generate an improved plan that addresses the identified issues
+
+        Return the complete modified plan as PlanModel with all steps."""
         
         modified_plan_result = self.llm_client.generate_response(
-            prompt, 
+            prompt,
             system_prompt,
-            response_model=ModifiedPlan
+            response_model=PlanModel
         )
-        
-        # Convert back to dict format with preserved metadata
-        modified_plan_dict = modified_plan_result.model_dump()
-        modified_plan_dict["plan_id"] = current_plan["plan_id"]  # Preserve original ID
-        modified_plan_dict["regulation_summary"] = current_plan.get("regulation_summary", "")
-        
-        return modified_plan_dict
+
+        return modified_plan_result
     
-    def _generate_plan_id(self) -> str:
-        """Generate unique plan ID"""
-        import uuid
-        return f"plan_{uuid.uuid4().hex[:8]}"
-    
-    def _get_timestamp(self) -> str:
-        """Get current timestamp"""
-        from datetime import datetime
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    def get_execution_context(self) -> Dict[str, Any]:
-        """Get execution context from shared context"""
-        if self.shared_context:
-            return self.shared_context.get_context_for_agent("planner")
-        return {}
+
+ 

@@ -1,0 +1,27 @@
+{
+  "version": "1.0.0",
+  "description": "Tool library metadata for building compliance checking system",
+  "categories": {
+    "builtin": "Core IFC processing tools",
+    "ifcopenshell": "IFC-specific analysis and compliance tools",
+    "mcp": "Model Context Protocol tools",
+    "openapi": "OpenAPI integration tools",
+    "langchain": "LangChain integration tools"
+  },
+  "created": "2025-01-01T00:00:00Z",
+  "last_updated": "2025-01-01T00:00:00Z",
+  "test_function": {
+    "name": "test_function",
+    "description": "Test function for addition",
+    "category": "test",
+    "file_path": "domain_tools\\test\\test_function.py",
+    "created_at": "2025-09-17T11:28:49.839853",
+    "updated_at": "2025-09-17T11:28:49.839853",
+    "author": "test_user",
+    "version": "1.0.0",
+    "tags": [
+      "math",
+      "addition"
+    ]
+  }
+}

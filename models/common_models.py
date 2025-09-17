@@ -39,18 +39,8 @@ class StepModel(BaseModel):
 
 class PlanModel(BaseModel):
     """Model for structured plans"""
-    plan_id: str = Field(..., description="Unique plan identifier")
     steps: List[StepModel] = Field(..., min_items=1, description="List of plan steps")
 
-
-# === Meta Tools ===
-
-class MetaToolResult(BaseModel):
-    """Standardized result model for meta tool execution"""
-    success: bool = Field(..., description="Whether the execution was successful")
-    tool_name: str = Field(..., description="Name of the tool executed")
-    result: Optional[Dict[str, Any]] = Field(None, description="Result data if successful")
-    error: Optional[str] = Field(None, description="Error message if failed")
 
 
 # === Executor ===
@@ -109,33 +99,58 @@ class ExecutionState(BaseModel):
         self.last_observation = observation
 
 
+
 # === Checker ===
 
-class ViolationModel(BaseModel):
-    """Model for compliance violations"""
-    requirement: str = Field(..., description="Which requirement was violated")
-    severity: Literal["critical", "major", "minor"] = Field(..., description="Severity level of violation")
-    details: str = Field(..., description="What specifically failed")
+class CheckedComponent(BaseModel):
+    """Model for individual IFC component compliance check result"""
+    component_id: str = Field(..., description="IFC GUID or unique component identifier")
+    component_type: str = Field(..., description="IFC class or category, e.g., IfcDoor, IfcWall")
+    checked_rule: str = Field(..., description="The rule/check being applied")
+    data_used: Dict[str, str] = Field(..., description="Key-value data used for compliance checking")
+    compliance_status: str = Field(..., description="one of: compliant, non_compliant, uncertain")
+    violation_reason: Optional[str] = Field(None, description="Reason for non-compliance if applicable")
+    suggested_fix: Optional[str] = Field(None, description="Optional suggestion to fix non-compliance")
+
+
+class RelationshipCheck(BaseModel):
+    """Model for relationship-based compliance checks between IFC components"""
+    relation_type: str = Field(..., description="Type of relationship being checked (e.g., geometry / topology / semantic)")
+    relation_name: str = Field(..., description="Name of the relationship being checked")
+    involved_components: List[str] = Field(..., description="List of components involved in the relationship")
+    compliance_status: str = Field(..., description="Compliance status of the relationship")
+    analysis_evidence: Optional[Dict[str, str]] = Field(None, description="Evidence supporting the compliance analysis")
+    violation_reason: Optional[str] = Field(None, description="Reason for non-compliance if applicable")
+    suggested_fix: Optional[str] = Field(None, description="Optional suggestion to fix non-compliance")
 
 
 class ComplianceEvaluationModel(BaseModel):
     """Model for compliance evaluation results"""
-    compliant: bool = Field(..., description="Overall compliance status")
-    summary: str = Field(..., description="One-line summary of compliance status")
-    violations: List[ViolationModel] = Field(default_factory=list, description="List of violations found")
-    passed_checks: List[str] = Field(default_factory=list, description="List of requirements that passed")
-    recommendations: List[str] = Field(default_factory=list, description="Actionable steps to achieve compliance")
+    overall_status: str = Field(..., description="Aggregate status: compliant / non_compliant / partial / uncertain / not_applicable")
+    compliant_components: List[CheckedComponent] = Field(..., description="List of compliant components")
+    non_compliant_components: List[CheckedComponent] = Field(..., description="List of non-compliant components")
+    uncertain_components: List[CheckedComponent] = Field(..., description="List of components with uncertain compliance")
+    relationship_checks: Optional[List[RelationshipCheck]] = Field(None, description="List of relationship checks performed")
+
+
+# === Meta Tools ===
+
+class MetaToolResult(BaseModel):
+    """Standardized result model for meta tool execution"""
+    success: bool = Field(..., description="Whether the execution was successful")
+    meta_tool_name: str = Field(..., description="Name of the meta tool executed")
+    result: Optional[Dict[str, Any]] = Field(None, description="Result data if successful")
+    error: Optional[str] = Field(None, description="Error message if failed")
 
 
 # === Tool Creation ===
 
-class ToolRequirement(BaseModel):  
+class ToolSpec(BaseModel):
     """Tool requirement specification"""
     description: str = Field(..., description="Description of what the tool should do")
     function_name: str = Field(..., description="Name of the function to be created")
     parameters: List[Dict[str, Any]] = Field(..., description="List of function parameters")
     return_type: str = Field(..., description="Expected return type of the function")
-    examples: Optional[List[str]] = Field(None, description="Optional usage examples")
     library: str = Field(default="ifcopenshell", description="Primary library used by this tool")
 
 
@@ -145,21 +160,51 @@ class RetrievedDocument(BaseModel):
     metadata: Dict[str, Any] = Field(..., description="Document metadata")
     relevance_score: float = Field(..., description="Relevance score for the document")
 
-    
-class ToolCreationResult(BaseModel):
-    """Final result of tool creation process"""
-    success: bool = Field(..., description="Whether tool creation was successful")
-    generated_code: str = Field(..., description="The generated tool code")
-    issues: List[str] = Field(default_factory=list, description="List of issues encountered")
-    static_check_passes: int = Field(..., description="Number of static checks passed")
+
+class ToolParam(BaseModel):
+    """Function parameter definition"""
+    name: str = Field(..., description="Parameter name")
+    type: str = Field(..., description="Parameter type, e.g., 'str', 'int', 'float', 'dict'")
+    description: Optional[str] = Field(None, description="Parameter description")
+    required: bool = Field(..., description="Is this parameter required?")
+    default: Optional[str] = Field(None, description="Default value for the parameter (as a string)")
 
 
-class StaticCheckResult(BaseModel):
-    """Static code analysis result"""
-    is_valid: bool = Field(..., description="Whether the code passes static analysis")
-    errors: List[str] = Field(default_factory=list, description="List of errors found")
-    warnings: List[str] = Field(default_factory=list, description="List of warnings found")
-    suggestions: List[str] = Field(default_factory=list, description="List of improvement suggestions")
+class ToolMetadata(BaseModel):
+    """Metadata for the created tool"""
+    description: str = Field(..., description="Short description of the tool")
+    parameters: List[ToolParam] = Field(..., description="Function parameters")
+    return_type: Optional[str] = Field(None, description="Function return type")
+    category: str = Field(default="IfcOpenShell", description="Tool category for organization")
+    tags: List[str] = Field(default_factory=list, description="Keywords for retrieval")
+
+
+class ToolCreatorOutput(BaseModel):
+    """Output model for tool creation"""
+    tool_name: str = Field(..., description="Tool name, unique identifier")
+    code: str = Field(..., description="Python function code as a string")
+    metadata: ToolMetadata = Field(..., description="Tool metadata")
+
+
+# === Tool Execution and Fixing ===
+
+class DomainToolResult(BaseModel):
+    """Result model for domain tool execution (syntax and runtime)"""
+    success: bool = Field(..., description="Whether the code passed the check")
+    domain_tool_name: str = Field(..., description="Tool name")
+    result: Optional[Any] = Field(None, description="Result of code execution if successful")
+    parameters_used: Dict[str, Any] = Field(default_factory=dict, description="Parameters used")
+
+    # Error-related fields (only present when success=False)
+    error_message: Optional[str] = Field(None, description="Error message")
+    exception_type: Optional[str] = Field(None, description="Exception type, e.g., SyntaxError, RuntimeError")
+    traceback: Optional[str] = Field(None, description="Complete stack trace")
+    line_number: Optional[int] = Field(None, description="Line number where the error occurred")
+
+
+class FixedCodeOutput(BaseModel):
+    """Output model for fixed code"""
+    code: str = Field(..., description="Fixed Python code")
 
 
 # === Sandbox Executor ===
@@ -169,8 +214,6 @@ class TestResult(BaseModel):
     success: bool = Field(..., description="Whether the test was successful")
     output: str = Field(..., description="Test output message")
     error: str = Field(..., description="Error message if test failed")
-
-
 
 
 

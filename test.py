@@ -58,7 +58,7 @@ checker = Checker()
 # print(summary)
 
 #___________________________________________________________________________
-tool_requirement = ToolRequirement(
+tool_spec = ToolSpec(
     description="Extracts the thickness of a wall from an IFC model given its ID.",
     function_name="get_wall_thickness",
     parameters=[
@@ -66,10 +66,7 @@ tool_requirement = ToolRequirement(
         {"name": "wall_id", "type": "str", "description": "The unique identifier of the wall in the IFC model."}
     ],
     return_type="float",
-    examples=[
-        "get_wall_thickness('example.ifc', 'Wall_123') -> 0.25",
-        "get_wall_thickness('building.ifc', 'Wall_456') -> 0.30"
-    ]
+    library="ifcopenshell"
 )
 
 tool_creator = CodeGeneratorAgent()

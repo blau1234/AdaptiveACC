@@ -1,172 +1,119 @@
 import json
-from typing import Dict, List, Any
-from datetime import datetime
 from utils.llm_client import LLMClient
-from data_models.shared_models import ComplianceEvaluationModel
-from shared_context import SharedContext
+from models.common_models import ComplianceEvaluationModel
+from models.shared_context import SharedContext
 
-class Checker:   
-    
-    def __init__(self, shared_context: SharedContext = None):
+class Checker:
+
+    def __init__(self):
         self.llm_client = LLMClient()
-        self.shared_context = shared_context
+        self.shared_context = SharedContext.get_instance()
     
-    def evaluate_compliance(self, 
-                          execution_results: List[Dict[str, Any]], 
-                          regulation_text: str,
-                          plan: Dict[str, Any] = None) -> ComplianceEvaluationModel:
+    def evaluate_compliance(self) -> ComplianceEvaluationModel:
+        """Evaluate overall compliance based on execution results and regulation text"""
+
+        regulation_text = self.shared_context.session_info.get("regulation_text", "")
+        process_trace = self.shared_context.process_trace
+
+        system_prompt = """You are a building code compliance expert specializing in IFC-based regulatory analysis with systematic evaluation methodology.
+
+        ## Core Mission
+        Analyze execution results to determine compliance with building regulations, producing structured component-level and relationship-level assessments.
+
+        ## Analysis Framework
+
+        ### 1. Component-Level Analysis (CheckedComponent)
+        For each IFC component and applicable regulatory requirement:
+
+        **component_id**: Use the IFC GUID if available; otherwise, a unique identifier
+        **component_type**: Exact IFC class name (e.g., "IfcDoor", "IfcWall", "IfcStair", "IfcSpace")
+        **checked_rule**: Specific rule/requirement being evaluated (e.g., "Minimum door width", "Fire rating requirement", "Accessibility compliance", "Structural load capacity")
+        **data_used**: Key-value pairs of the actual data used for compliance checking:
+        - Dimensional data: {"Height": "2100mm", "Width": "900mm", "Thickness": "200mm"}
+        - Material data: {"Material": "Steel", "FireRating": "60min"}
+        - Positional data: {"Location": "Ground Floor", "Room": "Corridor"}
+        - Property data: {"LoadCapacity": "5kN/m2", "ThermalTransmittance": "0.3"}
+
+        **compliance_status**: Precise classification
+        - "compliant": Meets the applicable requirement
+        - "non_compliant": Fails the requirement
+        - "uncertain": Insufficient data or ambiguous requirement
+
+        **violation_reason**: Specific, measurable non-compliance explanation:
+        - "Door width 750mm < required minimum 800mm"
+        - "Fire rating 30min < required 60min for this occupancy"
+        - "Missing accessibility features required for public building"
+
+        **suggested_fix**: Actionable, specific remediation:
+        - "Increase door width to minimum 800mm"
+        - "Replace with 60-minute fire-rated door assembly"
+        - "Install accessibility hardware and tactile indicators"
+
+        ### 2. Relationship-Level Analysis (RelationshipCheck)
+        For regulations involving component interactions:
+
+        **relation_type examples**:
+        - "geometry": Spatial relationships, clearances, distances
+        - "topology": Connectivity, adjacency, containment
+        - "semantic": Functional relationships, performance interactions
+
+        **relation_name**: Descriptive name of the specific relationship being checked
+        **involved_components**: List of component IDs participating in the relationship
+        **analysis_evidence**: Evidence supporting the assessment:
+        {"clearance_measured": "600mm", "clearance_required": "800mm", "measurement_method": "center-to-center"}
+
+        ### 3. Overall Status Determination (overall_status)
         
-        system_prompt = """You are a building code compliance expert.
-        Evaluate if the execution results meet the regulation requirements.
-        
-        Analyze the results and provide:
-        - Overall compliance status (true/false)
-        - Summary of compliance status
-        - List of violations with severity levels (critical/major/minor)
-        - List of requirements that passed
-        - Actionable recommendations for compliance
-        """
-        
+        **"compliant"**: All components meet requirements, no critical violations
+        **"non_compliant"**: None components meet requirements
+        **"partial"**: Mix of compliant and non-compliant components
+        **"uncertain"**: Significant gaps in data or analysis
+        **"not_applicable"**: Regulation doesn't apply to the analyzed components
+
+        ## Evaluation Process
+
+        1. **Extract Component Data**: Identify all IFC components from execution results
+        2. **Map to Regulations**: Determine which regulatory requirements apply to each component
+        3. **Create Rule-Component Pairs**: Generate separate CheckedComponent entries for each rule applied to each component
+        4. **Assess Compliance**: Compare actual values against regulatory thresholds for each rule
+        5. **Document Evidence**: Record specific data used in each decision
+        6. **Provide Solutions**: Offer concrete, implementable fixes for violations
+
+        ## Multi-Rule Component Handling
+
+        - A single IFC component may require multiple CheckedComponent entries if multiple rules apply
+        - Example: An IfcDoor might be checked for "Minimum width", "Fire rating", "Accessibility features", and "Material specification"
+        - Each rule gets its own CheckedComponent with specific data_used, compliance_status, and potential violation_reason
+        - Ensure each checked_rule is clearly named and distinguishable
+
+        ## Quality Standards
+
+        - Base all assessments on concrete data from execution results
+        - Use precise measurements and specific regulatory references
+        - Ensure suggested fixes are technically feasible and code-compliant
+        - Maintain consistency between component assessments and overall status
+        - Include sufficient evidence for audit trail and verification"""
+
         prompt = f"""
-        Building Regulation: {regulation_text}
-        Execution Results: {json.dumps(execution_results, indent=2)}   
-        {f"Original Plan: {json.dumps(plan, indent=2)}" if plan else "No plan information available"}
-        
-        Please evaluate compliance based on these results.
+        REGULATION TEXT:
+        {regulation_text}
+
+        EXECUTION RESULTS:
+        {json.dumps(process_trace, indent=2)}
+
+        TASK: Perform comprehensive compliance evaluation based on the execution results above.
         """
-        
+
         try:
             return self.llm_client.generate_response(
-                prompt, 
+                prompt,
                 system_prompt,
                 response_model=ComplianceEvaluationModel
             )
-            
+
         except Exception as e:
             print(f"Compliance evaluation failed: {e}")
             raise RuntimeError(f"Compliance evaluation failed: {e}") from e
     
-    def generate_report(self, 
-                       evaluation: ComplianceEvaluationModel,
-                       execution_results: List[Dict[str, Any]],
-                       regulation_text: str) -> Dict[str, Any]:
-        
-        report = {
-            "report_id": self._generate_report_id(),
-            "generated_at": datetime.now().isoformat(),
-            
-            # Executive summary - information that decision makers care about most
-            "executive_summary": {
-                "status": "COMPLIANT" if evaluation.compliant else "NON-COMPLIANT",
-                "summary": evaluation.summary,
-                "critical_issues": len([v for v in evaluation.violations 
-                                      if v.severity == 'critical'])
-            },
-            
-            # Compliance details
-            "compliance_details": {
-                "regulation_reference": regulation_text[:200] + "...",  # Summary
-                "total_requirements_checked": len(execution_results),
-                "passed_requirements": evaluation.passed_checks,
-                "violations": [v.model_dump() for v in evaluation.violations]
-            },
-            
-            # Recommended actions
-            "recommendations": {
-                "immediate_actions": [rec for rec in evaluation.recommendations
-                                    if self._is_immediate_action(rec)],
-                "long_term_improvements": [rec for rec in evaluation.recommendations
-                                         if not self._is_immediate_action(rec)]
-            },
-            
-            # Detailed check results (for technical reference)
-            "detailed_results": self._format_detailed_results(execution_results),
-            
-            # Report metadata
-            "metadata": {
-                "checker_version": "2.0",
-                "evaluation_method": "LLM-based analysis",
-                "data_sources": ["execution_results", "regulation_text", "plan"]
-            }
-        }
-        
-        return report
+
     
-    
-    
-    
-    def _is_immediate_action(self, recommendation: str) -> bool:
-        """
-        Determine if recommendation needs immediate action
-        Simple classification based on keywords
-        """
-        immediate_keywords = ['immediate', 'urgent', 'critical', 'must', 'required', 'safety']
-        return any(keyword in recommendation.lower() for keyword in immediate_keywords)
-    
-    def _format_detailed_results(self, execution_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Format detailed results, keep all technical information
-        """
-        return [
-            {
-                "step_number": i + 1,
-                "description": result.get('detail', 'No description'),
-                "status": result.get('result', 'unknown'),
-                "technical_details": {
-                    k: v for k, v in result.items() 
-                    if k not in ['detail', 'result']  # Avoid duplication
-                }
-            }
-            for i, result in enumerate(execution_results)
-        ]
-    
-    def _generate_report_id(self) -> str:
-        """Generate unique report ID"""
-        return f"RPT-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    
-    # === Convenience methods ===
-    
-    def check_and_report(self, plan: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Check compliance and generate report using shared context"""
-        
-        if not self.shared_context:
-            raise RuntimeError("Shared context not available for compliance checking")
-        
-        # Get regulation text from shared context
-        regulation_text = self.shared_context.session_info.get("regulation_text", "")
-        if not regulation_text:
-            raise RuntimeError("Regulation text not found in shared context")
-        
-        # Get execution results from shared context
-        execution_results = []
-        for result in self.shared_context.execution_summary:
-            if result.get("agent") == "executor" and result.get("tool_results"):
-                execution_results.extend(result["tool_results"])
-            elif result.get("step_result"):
-                execution_results.append(result["step_result"])
-        
-        evaluation = self.evaluate_compliance(execution_results, regulation_text, plan)
-        report = self.generate_report(evaluation, execution_results, regulation_text)
-        
-        
-        # Compliance check completed
-        print(f"Compliance check completed - Violations: {len(evaluation.violations)}, Passed: {len(evaluation.passed_checks)}")
-        
-        
-        return report
-    
-    def get_compliance_context(self) -> Dict[str, Any]:
-        """Get compliance context from shared context"""
-        if self.shared_context:
-            return self.shared_context.get_context_for_agent("checker")
-        return {}
-    
-    def export_report(self, report: Dict[str, Any], format: str = "json") -> str:
-        """
-        Export report to specified format
-        Currently only supports JSON, but architecture allows easy extension
-        """
-        if format.lower() == "json":
-            return json.dumps(report, ensure_ascii=False, indent=2)
-        else:
-            raise ValueError(f"Unsupported format: {format}. Currently only 'json' is supported.")

@@ -4,36 +4,49 @@ from typing import List
 
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-from dotenv import load_dotenv
 
-from data_models.shared_models import RetrievedDocument
+from models.common_models import RetrievedDocument
+from utils.base_classes import Singleton
 from config import Config
 
-# Load environment variables
-load_dotenv()
 
+class DocumentRetriever(Singleton):
+    """Singleton specialized retriever for document operations only"""
 
-class DocumentRetriever:
-    """Specialized retriever for document operations only"""
-    
-    def __init__(self, vectordb_path: str = "vectordb/docs", collection_name: str = "ifcopenshell_langchain_docs"):
-        self.vectordb_path = Path(vectordb_path)
-        self.collection_name = collection_name
-        
+    def __init__(self):
+        super().__init__()
+
+    def _initialize(self):
+        """Initialize DocumentRetriever instance"""
+        # Direct vectordb path management with default values
+        self.vectordb_path = Path("vectordb") / "docs"
+        self.vectordb_path.mkdir(parents=True, exist_ok=True)
+
+        self.collection_name = "ifcopenshell_langchain_docs"
+
         # Use dedicated embedding API configuration
         embedding_kwargs = {
             "model": Config.EMBEDDING_MODEL_NAME,
             "openai_api_key": Config.EMBEDDING_API_KEY,
             "dimensions": 1536
         }
-        
+
         # Add base URL if specified for embedding API
         if Config.EMBEDDING_API_BASE:
             embedding_kwargs["openai_api_base"] = Config.EMBEDDING_API_BASE
-            
+
         self.embeddings = OpenAIEmbeddings(**embedding_kwargs)
-        self.vector_store = self._load_vector_store()
-    
+        self.vector_store = None
+
+        print("DocumentRetriever: Singleton instance initialized")
+
+    # Note: get_instance method inherited from Singleton base class
+
+    def _ensure_loaded(self):
+        """Ensure vector store is loaded (lazy loading)"""
+        if self.vector_store is None:
+            self.vector_store = self._load_vector_store()
+
     def _load_vector_store(self) -> Chroma:
         """Load the existing document vector store"""
         if not self.vectordb_path.exists():
@@ -58,6 +71,9 @@ class DocumentRetriever:
             List of RetrievedDocument objects
         """
         try:
+            # Ensure vector store is loaded
+            self._ensure_loaded()
+
             # Execute vector search directly
             if metadata_filter:
                 results = self.vector_store.similarity_search_with_score(
