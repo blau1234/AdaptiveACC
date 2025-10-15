@@ -1,371 +1,52 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Building Code Compliance Check System</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f5f5f5;
-            height: 100vh;
-            overflow: hidden;
-        }
-        .main-container {
-            display: flex;
-            height: 100vh;
-        }
-        .left-panel {
-            width: 35%;
-            background-color: white;
-            padding: 15px;
-            overflow-y: auto;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-        }
-        .right-panel {
-            width: 65%;
-            background-color: #fafafa;
-            display: flex;
-            flex-direction: column;
-        }
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 15px;
-            font-size: 1.2em;
-        }
-        .form-group {
-            margin-bottom: 12px;
-        }
-        label {
-            display: block;
-            margin-bottom: 3px;
-            font-weight: bold;
-            color: #555;
-            font-size: 0.9em;
-        }
-        textarea {
-            width: 100%;
-            height: 100px;
-            padding: 8px;
-            border: 1px solid #000;
-            border-radius: 4px;
-            font-size: 12px;
-            box-sizing: border-box;
-            outline: none;
-            resize: vertical;
-        }
-        textarea:focus {
-            border-color: #000;
-        }
-        .file-input-wrapper {
-            position: relative;
-            display: inline-block;
-            width: 100%;
-        }
-        .file-input-wrapper input[type="file"] {
-            position: absolute;
-            left: -9999px;
-        }
-        .file-input-label {
-            display: block;
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #000;
-            border-radius: 4px;
-            font-size: 14px;
-            font-weight: normal;
-            background-color: white;
-            cursor: pointer;
-            text-align: center;
-            transition: background-color 0.3s;
-            box-sizing: border-box;
-        }
-        .file-input-label:hover {
-            background-color: #e9ecef;
-        }
-        button {
-            background-color: #000000;
-            color: white;
-            padding: 8px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            width: 100%;
-        }
-        button:hover {
-            background-color: #333333;
-        }
-        button:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-        .result {
-            margin-top: 15px;
-            padding: 12px;
-            border-radius: 4px;
-            display: none;
-            font-size: 0.85em;
-        }
-        .result.show {
-            display: block !important;
-        }
-        .result.success, .result.error {
-            background-color: #f5f5f5;
-            border: 1px solid #ddd;
-            color: #333;
-        }
-        .loading {
-            text-align: center;
-            color: #666;
-            font-size: 0.9em;
-        }
-        .step-info {
-            margin: 8px 0;
-            padding: 8px;
-            background-color: white;
-            border-radius: 4px;
-            border-left: 3px solid #007bff;
-            font-size: 0.8em;
-        }
-        
-        /* Report Card Styles */
-        .report-card {
-            background-color: white;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 16px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        
-        .report-card h3, .report-card h4 {
-            margin-top: 0;
-            margin-bottom: 12px;
-            color: #333;
-        }
-        
-        .report-card:last-child {
-            margin-bottom: 0;
-        }
-        
-        /* Right Panel Styles */
-        .ifc-preview-content {
-            flex: 1;
-            position: relative;
-            background-color: #e9ecef;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #666;
-        }
-        #ifc-viewer {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-        .preview-placeholder {
-            text-align: center;
-            font-size: 16px;
-        }
-        .preview-placeholder i {
-            font-size: 48px;
-            margin-bottom: 10px;
-            display: block;
-        }
-        
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script type="module" crossorigin src="/assets/main.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/main.css">
 </head>
 <body>
     <div class="main-container">
-        <!-- Left Panel: Form and Results -->
+        <!-- Left Panel: 3D Viewer -->
         <div class="left-panel">
-            <h1>Building Code Compliance Check</h1>
-            
+            <canvas id="three-canvas"></canvas>
+            <div id="viewer-overlay">
+                <div class="preview-placeholder" id="preview-placeholder">
+                    <i>📁</i>
+                    <div>Drag and drop IFC file here</div>
+                    <div style="font-size: 14px; margin-top: 10px; color: #6c757d;">or click to browse</div>
+                </div>
+                <div id="file-info" style="display: none; text-align: center;">
+                    <div style="font-size: 48px; margin-bottom: 15px;">✓</div>
+                    <div style="font-size: 18px; font-weight: 600; margin-bottom: 10px;" id="file-name-display"></div>
+                    <div style="font-size: 14px; color: #666;" id="file-size-display"></div>
+                    <div style="font-size: 12px; color: #999; margin-top: 15px;">Click or drag to change file</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Form and Results -->
+        <div class="right-panel">
             <form id="checkForm" enctype="multipart/form-data">
                 <div class="form-group">
                     <textarea id="regulation" name="regulation" placeholder="Enter building code text..." required></textarea>
                 </div>
-                
-                <div class="form-group">
-                    <div class="file-input-wrapper">
-                        <input type="file" id="ifc_file" name="ifc_file" accept=".ifc" required>
-                        <label for="ifc_file" class="file-input-label" id="file-label">
-                            Click to choose IFC file...
-                        </label>
-                    </div>
-                </div>
-                
+
+                <input type="file" id="ifc_file" name="ifc_file" accept=".ifc" required style="display: none;">
+
                 <button type="submit" id="submitBtn">Start Check</button>
             </form>
-            
+
             <div id="loading" class="loading" style="display: none;">
                 <p>Checking compliance, please wait...</p>
             </div>
-            
+
             <div id="result" class="result"></div>
         </div>
-        
-        <!-- Right Panel: IFC Model Preview -->
-        <div class="right-panel">
-            <div class="ifc-preview-content">
-                <div class="preview-placeholder" id="preview-placeholder">
-                    <i>🏠</i>
-                    <div>Select an IFC file to preview the 3D model</div>
-                </div>
-            </div>
-        </div>
     </div>
-
-    <script>
-        // Handle file input display
-        document.getElementById('ifc_file').addEventListener('change', function(e) {
-            const fileLabel = document.getElementById('file-label');
-            if (e.target.files.length > 0) {
-                const file = e.target.files[0];
-                fileLabel.textContent = `Selected file: ${file.name}`;
-                fileLabel.classList.add('has-file');
-            } else {
-                fileLabel.textContent = 'Click to choose IFC file...';
-                fileLabel.classList.remove('has-file');
-            }
-        });
-
-        document.getElementById('checkForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const submitBtn = document.getElementById('submitBtn');
-            const loading = document.getElementById('loading');
-            const result = document.getElementById('result');
-            
-            // Show loading state
-            submitBtn.disabled = true;
-            loading.style.display = 'block';
-            result.style.display = 'none';
-            
-            try {
-                const formData = new FormData(this);
-                
-                const response = await fetch('/check', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`Check failed: ${response.statusText}`);
-                }
-                
-                const response_data = await response.json();
-                const report = response_data.report;
-                
-                // Show result based on compliance status
-                const isCompliant = report.executive_summary?.status === 'COMPLIANT';
-                result.className = 'result show ' + (isCompliant ? 'success' : 'error');
-                
-                let resultHtml = `
-                    <h3>Compliance Check Report</h3>
-                    
-                    <div class="report-card">
-                        <h4 style="color: ${isCompliant ? '#333' : '#dc3545'}">${isCompliant ? 'COMPLIANT' : 'NON-COMPLIANT'}</h4>
-                        <p><strong>Summary:</strong> ${report.executive_summary?.summary || 'No summary available'}</p>
-                        <p><strong>Critical Issues:</strong> ${report.executive_summary?.critical_issues || 0}</p>
-                    </div>
-                    
-                    <div class="report-card">
-                        <h4>Compliance Details</h4>
-                        <p><strong>Total Checks:</strong> ${report.compliance_details?.total_requirements_checked || 0}</p>
-                `;
-                
-                // Show passed requirements
-                if (report.compliance_details?.passed_requirements?.length > 0) {
-                    resultHtml += `<p><strong>Passed Requirements:</strong></p><ul>`;
-                    report.compliance_details.passed_requirements.forEach(req => {
-                        resultHtml += `<li>${req}</li>`;
-                    });
-                    resultHtml += `</ul>`;
-                }
-                
-                // Show violations
-                if (report.compliance_details?.violations?.length > 0) {
-                    resultHtml += `<p><strong>Violations:</strong></p>`;
-                    report.compliance_details.violations.forEach(violation => {
-                        const severityColor = violation.severity === 'critical' ? '#dc3545' : 
-                                            violation.severity === 'major' ? '#fd7e14' : '#ffc107';
-                        resultHtml += `
-                            <div style="border-left: 4px solid ${severityColor}; padding: 10px; margin: 10px 0; background-color: white;">
-                                <strong>${violation.requirement}</strong> 
-                                <span style="color: ${severityColor}; font-weight: bold;">[${violation.severity?.toUpperCase()}]</span>
-                                <br><small>${violation.details}</small>
-                            </div>
-                        `;
-                    });
-                }
-                
-                resultHtml += `</div>`;
-                
-                // Show recommendations
-                if (report.recommendations?.immediate_actions?.length > 0 || report.recommendations?.long_term_improvements?.length > 0) {
-                    resultHtml += `<div class="report-card">
-                        <h4>Recommendations</h4>`;
-                    
-                    if (report.recommendations.immediate_actions?.length > 0) {
-                        resultHtml += `<p><strong>Immediate Actions:</strong></p><ul>`;
-                        report.recommendations.immediate_actions.forEach(action => {
-                            resultHtml += `<li>${action}</li>`;
-                        });
-                        resultHtml += `</ul>`;
-                    }
-                    
-                    if (report.recommendations.long_term_improvements?.length > 0) {
-                        resultHtml += `<ul>`;
-                        report.recommendations.long_term_improvements.forEach(improvement => {
-                            resultHtml += `<li>${improvement}</li>`;
-                        });
-                        resultHtml += `</ul>`;
-                    }
-                    
-                    resultHtml += `</div>`;
-                }
-                
-                // Show detailed results
-                if (report.detailed_results?.length > 0) {
-                    resultHtml += `<div class="report-card">
-                        <h4>Detailed Technical Results</h4>`;
-                    report.detailed_results.forEach((detail, index) => {
-                        const status = detail.status === 'pass' ? 'PASS' : 'FAIL';
-                        resultHtml += `
-                            <div class="step-info">
-                                <strong>[${status}] Step ${detail.step_number || index + 1}:</strong> ${detail.description || 'No description'}
-                                <br><small>Status: ${detail.status}</small>
-                                ${detail.technical_details ? `<br><small>Details: ${JSON.stringify(detail.technical_details, null, 2)}</small>` : ''}
-                            </div>
-                        `;
-                    });
-                    resultHtml += `</div>`;
-                }
-                
-                // Show report metadata
-                if (report.metadata) {
-                    resultHtml += `
-                        <div class="report-card" style="font-size: 12px; color: #666;">
-                            <strong>Report Info:</strong> Generated on ${new Date(report.generated_at).toLocaleString()} | 
-                            ID: ${report.report_id} | Version: ${report.metadata.checker_version}
-                        </div>
-                    `;
-                }
-                
-                result.innerHTML = resultHtml;
-                
-            } catch (error) {
-                result.className = 'result show error';
-                result.innerHTML = `<h3>Check Failed</h3><p>Error: ${error.message}</p>`;
-            } finally {
-                submitBtn.disabled = false;
-                loading.style.display = 'none';
-            }
-        });
-    </script>
+
 </body>
 </html>

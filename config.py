@@ -16,6 +16,9 @@ class Config:
     EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", os.getenv("OPENAI_API_KEY"))
     EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", os.getenv("OPENAI_API_BASE"))
     EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-ada-002")
+
+    # Tavily Search API configuration
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
     
     # System configuration
     DEBUG = os.getenv("DEBUG", "True").lower() == "true"

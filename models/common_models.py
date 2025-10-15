@@ -3,101 +3,22 @@ from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 
-# === Planner ===
+# === Regulation Interpretation ===
 
-class RegulationAnalysis(BaseModel):
-    """Enhanced model for building regulation analysis results with comprehensive compliance checking information"""
+class TermClarification(BaseModel):
+    """Clarification for a specific technical term in a regulation"""
 
-    # Core regulation information
-    original_text: str = Field(..., description="Original regulation text for reference")
-    summary: str = Field(..., description="Concise summary of the regulation's main requirements")
-
-    # Regulation scope and applicability
-    scope: str = Field(..., description="Scope of applicability (e.g., means of egress, doors, stairs, accessibility)")
-    applicability: Optional[Dict[str, Any]] = Field(default=None, description="Applicability conditions such as building type, door type, occupancy class")
-
-    # IFC-specific information for compliance checking
-    target_elements: List[str] = Field(..., description="IFC entities to be checked (e.g., IfcDoor, IfcStair, IfcWall, IfcSpace)")
-    required_attributes: List[str] = Field(..., description="IFC attributes required for checking (e.g., Height, Width, Material)")
-
-    # Compliance checking logic
-    check_type: str = Field(..., description="Type of check required: existence, comparison, range, relation, geometry, or aggregation")
-    check_conditions: List[str] = Field(..., description="Logical conditions extracted from regulation (e.g., 'width >= 800mm', 'height <= 2100mm')")
-
-    # Additional regulation context
-    dependencies: Optional[List[str]] = Field(default=None, description="References to other regulations or standards that this regulation depends on")
-    exceptions: Optional[List[str]] = Field(default=None, description="Exceptions or exemptions specified in the regulation")
+    term: str = Field(..., description="The term to clarify")
+    meaning: str = Field(..., description="What this term means in the regulation context")
+    ifc_mapping: Optional[str] = Field(None, description="How this term maps to IFC entities/properties (e.g., 'exit → IfcDoor with IsExternal=True')")
+    examples: List[str] = Field(default_factory=list, description="Examples to illustrate the concept")
 
 
-class StepModel(BaseModel):
-    """Model for individual plan steps"""
-    description: str = Field(..., min_length=1, description="Step description")
-    task_type: str = Field(..., description="Type of task (e.g., measurement, validation, parsing)")
-    inputs: Dict[str, Any] = Field(default_factory=dict, description="Step-specific inputs or parameters")
-    expected_output: str = Field(..., description="Expected output description")
-
-
-class PlanModel(BaseModel):
-    """Model for structured plans"""
-    steps: List[StepModel] = Field(..., min_items=1, description="List of plan steps")
-
-
-
-# === Executor ===
-
-class ReActResponse(BaseModel):
-    """Structured ReAct response model for LLM output parsing"""
-    thought: str = Field(..., description="Your reasoning about what needs to be done next")
-    action: Optional[str] = Field(None, description="The exact tool name to use from available tools")
-    action_input: Optional[Dict[str, Any]] = Field(None, description="Parameters for the selected tool")
-    observation: Optional[str] = Field(None, description="Your interpretation of the previous action result, analyzing what was accomplished and its significance for the task")
-    is_final: bool = Field(False, description="Whether this is the final response completing the task")
-
-
-class StepExecutionResult(BaseModel):
-    """Result model for Executor step execution"""
-
-    # Core fields
-    step_index: int = Field(..., description="Step position in plan.steps array")
-    status: Literal["success", "timeout", "failed"] = Field(..., description="Execution status")
-
-    # ReAct related
-    execution_history: List[Dict[str, Any]] = Field(default_factory=list, description="ReAct iteration history")
-    iterations_used: Optional[int] = Field(None, description="Number of iterations used")
-
-    # Result related
-    tool_results: List[Any] = Field(default_factory=list, description="Tool execution results")
-    error: Optional[str] = Field(None, description="Error message if failed")
-
-
-class ExecutionState(BaseModel):
-    """Local state management for single step execution in Executor"""
-
-    step_index: int = Field(..., description="Step position in plan.steps array")
-    step: Dict[str, Any] = Field(..., description="Current step being executed")
- 
-    # ReAct iteration tracking
-    history: List[Dict[str, Any]] = Field(default_factory=list, description="ReAct iteration history")
-    tool_results: List[Any] = Field(default_factory=list, description="Successful tool execution results")
-    last_observation: str = Field(..., description="Previous observation from last iteration (provides context for next iteration)")
-
-    def add_iteration(self, iteration: int, thought: str, action: str):
-        """Record a ReAct iteration"""
-        self.history.append({
-            "iteration": iteration,
-            "thought": thought,
-            "action": action
-        })
-        
-    def add_tool_result(self, result: Any):
-        """Add successful tool execution result"""
-        if result:
-            self.tool_results.append(result)
-
-    def update_observation(self, observation: str):
-        """Update last observation state for next iteration context"""
-        self.last_observation = observation
-
+class RegulationInterpretation(BaseModel):
+    """Human-readable interpretation of a regulation with disambiguated semantics"""
+    plain_language: str = Field(..., description="Simple explanation of the regulation in everyday language (2-3 sentences)")
+    term_clarifications: List[TermClarification] = Field(default_factory=list, description="Clarifications for technical terms and concepts that may be ambiguous")
+    common_misunderstandings: List[str] = Field(default_factory=list, description="Common mistakes or misinterpretations to avoid when implementing this check")
 
 
 # === Checker ===
@@ -133,13 +54,13 @@ class ComplianceEvaluationModel(BaseModel):
     relationship_checks: Optional[List[RelationshipCheck]] = Field(None, description="List of relationship checks performed")
 
 
-# === Meta Tools ===
+# === Agent Tools ===
 
-class MetaToolResult(BaseModel):
-    """Standardized result model for meta tool execution"""
+class AgentToolResult(BaseModel):
+    """Standardized result model for agent tool execution"""
     success: bool = Field(..., description="Whether the execution was successful")
-    meta_tool_name: str = Field(..., description="Name of the meta tool executed")
-    result: Optional[Dict[str, Any]] = Field(None, description="Result data if successful")
+    agent_tool_name: str = Field(..., description="Name of the agent tool executed")
+    result: Optional[Any] = Field(None, description="Result data if successful")
     error: Optional[str] = Field(None, description="Error message if failed")
 
 
@@ -172,6 +93,7 @@ class ToolParam(BaseModel):
 
 class ToolMetadata(BaseModel):
     """Metadata for the created tool"""
+    ifc_tool_name: str = Field(..., description="Tool name, unique identifier")
     description: str = Field(..., description="Short description of the tool")
     parameters: List[ToolParam] = Field(..., description="Function parameters")
     return_type: Optional[str] = Field(None, description="Function return type")
@@ -181,17 +103,17 @@ class ToolMetadata(BaseModel):
 
 class ToolCreatorOutput(BaseModel):
     """Output model for tool creation"""
-    tool_name: str = Field(..., description="Tool name, unique identifier")
+    ifc_tool_name: str = Field(..., description="Tool name, unique identifier")
     code: str = Field(..., description="Python function code as a string")
     metadata: ToolMetadata = Field(..., description="Tool metadata")
 
 
-# === Tool Execution and Fixing ===
+# === IFC Tool Execution and Fixing ===
 
-class DomainToolResult(BaseModel):
-    """Result model for domain tool execution (syntax and runtime)"""
+class IFCToolResult(BaseModel):
+    """Result model for IFC tool execution (syntax and runtime)"""
     success: bool = Field(..., description="Whether the code passed the check")
-    domain_tool_name: str = Field(..., description="Tool name")
+    ifc_tool_name: str = Field(..., description="IFC tool name")
     result: Optional[Any] = Field(None, description="Result of code execution if successful")
     parameters_used: Dict[str, Any] = Field(default_factory=dict, description="Parameters used")
 
@@ -216,5 +138,30 @@ class TestResult(BaseModel):
     error: str = Field(..., description="Error message if test failed")
 
 
+# === ComplianceAgent ===
+
+class SubgoalModel(BaseModel):
+    """Subgoal model - replaces StepModel"""
+    id: int = Field(..., description="Subgoal ID")
+    description: str = Field(..., min_length=1, description="Goal description (WHAT to achieve, not HOW)")
+    status: Literal["pending", "in_progress", "completed"] = Field(default="pending", description="Subgoal status")
+    rationale: Optional[str] = Field(None, description="Why this subgoal is needed")
+
+
+class SubgoalSetModel(BaseModel):
+    """Subgoal collection - replaces PlanModel
+    Note: subgoals can be empty initially in ReAct architecture, as the agent may generate them dynamically during execution.
+    """
+    subgoals: List[SubgoalModel] = Field(default_factory=list, description="List of subgoals (can be empty initially)")
+    regulation_summary: str = Field(default="", description="Brief summary of the regulation")
+
+
+class AgentResult(BaseModel):
+    """ReAct agent execution result"""
+    status: Literal["success", "timeout", "failed"] = Field(..., description="Execution status")
+    iterations_used: int = Field(..., description="Number of ReAct iterations used")
+    agent_history: List[Dict[str, Any]] = Field(default_factory=list, description="Complete ReAct history")
+    compliance_result: Optional[ComplianceEvaluationModel] = Field(None, description="Final compliance evaluation result")
+    error: Optional[str] = Field(None, description="Error message if failed")
 
 

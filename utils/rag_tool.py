@@ -63,33 +63,50 @@ class ToolVectorManager(Singleton):
             collection_name=self.collection_name
         )
     
-    def search_tools(self, query: str, k: int = 5, metadata_filter: dict = None) -> List[Dict[str, Any]]:
-        """Search for tools using semantic vector search"""
-    
+    def search_tools(self, query: str, k: int = 5, metadata_filter: dict = None, score_threshold: float = 1.2) -> List[Dict[str, Any]]:
+        """Search for tools using semantic vector search with relevance threshold
+
+        Args:
+            query: Search query string
+            k: Maximum number of results to return
+            metadata_filter: Optional metadata filter
+            score_threshold: Maximum distance score (lower is better). Default 1.2 balances precision and recall.
+                           Scores: <1.0=highly relevant, 1.0-1.2=moderately relevant, >1.2=not relevant
+
+        Returns:
+            List of tool metadata dictionaries with relevance_score field
+        """
+
         self._ensure_loaded()
-        
+
         if self.vector_store is None:
             return []
-            
+
         try:
-            # Execute vector search directly
+            # Search for extra results to account for threshold filtering
+            search_k = k * 2
+
+            # Execute vector search
             if metadata_filter:
                 results = self.vector_store.similarity_search_with_score(
-                    query, k=k, filter=metadata_filter
+                    query, k=search_k, filter=metadata_filter
                 )
             else:
-                results = self.vector_store.similarity_search_with_score(query, k=k)
-            
-            # Process results into tool metadata format
+                results = self.vector_store.similarity_search_with_score(query, k=search_k)
+
+            # Filter by similarity score threshold and process results
             tool_results = []
             for doc, score in results:
-                tool_metadata = doc.metadata.copy()
-                tool_metadata['relevance_score'] = score
-                tool_metadata['content'] = doc.page_content
-                tool_results.append(tool_metadata)
-            
-            return tool_results
-            
+                # Only include tools that pass the threshold (lower score = more similar)
+                if score <= score_threshold:
+                    tool_metadata = doc.metadata.copy()
+                    tool_metadata['relevance_score'] = score
+                    tool_metadata['content'] = doc.page_content
+                    tool_results.append(tool_metadata)
+
+            # Return up to k results that passed the threshold
+            return tool_results[:k]
+
         except Exception as e:
             print(f"Tool vector search error: {e}")
             return []
@@ -170,3 +187,97 @@ class ToolVectorManager(Singleton):
         """Check if vector database is available"""
         self._ensure_loaded()
         return self.vector_store is not None
+
+    def get_all_tools(self) -> List[Dict[str, Any]]:
+        """Get all tools from vector database
+
+        Returns:
+            List of tool metadata dictionaries
+        """
+        self._ensure_loaded()
+
+        if self.vector_store is None:
+            return []
+
+        try:
+            # Get all documents from the collection
+            collection = self.vector_store._collection
+            results = collection.get(include=["metadatas", "documents"])
+
+            # Convert to tool metadata format
+            tools = []
+            if results and results.get('metadatas'):
+                for i, metadata in enumerate(results['metadatas']):
+                    tool_data = metadata.copy()
+                    if i < len(results.get('documents', [])):
+                        tool_data['content'] = results['documents'][i]
+                    if i < len(results.get('ids', [])):
+                        tool_data['_id'] = results['ids'][i]
+                    tools.append(tool_data)
+
+            return tools
+
+        except Exception as e:
+            print(f"Error getting all tools from vector database: {e}")
+            return []
+
+    def delete_tool(self, tool_name: str) -> bool:
+        """Delete a tool from vector database by tool_name
+
+        Args:
+            tool_name: Name of the tool to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        self._ensure_loaded()
+
+        if self.vector_store is None:
+            return False
+
+        try:
+            # Find the document ID(s) for this tool_name
+            collection = self.vector_store._collection
+            results = collection.get(
+                where={"tool_name": tool_name},
+                include=["metadatas"]
+            )
+
+            if not results or not results.get('ids'):
+                print(f"Tool '{tool_name}' not found in vector database")
+                return False
+
+            # Delete all documents with this tool_name
+            ids_to_delete = results['ids']
+            self.vector_store.delete(ids=ids_to_delete)
+
+            print(f"Deleted tool '{tool_name}' from vector database ({len(ids_to_delete)} documents)")
+            return True
+
+        except Exception as e:
+            print(f"Error deleting tool from vector database: {e}")
+            return False
+
+    def update_tool(self, tool_metadata: Dict[str, Any]) -> bool:
+        """Update a tool in vector database (delete old, add new)
+
+        Args:
+            tool_metadata: Updated tool metadata dictionary
+
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        tool_name = tool_metadata.get('tool_name', 'unknown')
+
+        # Delete old version
+        self.delete_tool(tool_name)
+
+        # Add new version
+        success = self.add_tool(tool_metadata)
+
+        if success:
+            print(f"Updated tool '{tool_name}' in vector database")
+        else:
+            print(f"Failed to update tool '{tool_name}'")
+
+        return success

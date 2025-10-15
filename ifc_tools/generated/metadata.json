@@ -1,0 +1,159 @@
+{
+  "extract_stair_riser_height": {
+    "ifc_tool_name": "extract_stair_riser_height",
+    "description": "Extract riser height from IfcStair property sets in an IFC file",
+    "parameters": [
+      {
+        "name": "ifc_file_path",
+        "type": "str",
+        "description": "Path to the IFC file containing the stair elements",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "stair_id",
+        "type": "str",
+        "description": "Unique identifier (GlobalId) of the IfcStair element",
+        "required": true,
+        "default": null
+      }
+    ],
+    "return_type": "Optional[float]",
+    "category": "attributes",
+    "tags": [
+      "stair",
+      "riser",
+      "height",
+      "property",
+      "geometry",
+      "ifcstair"
+    ],
+    "file_path": "ifc_tools\\generated\\attributes\\extract_stair_riser_height.py",
+    "created_at": "2025-10-13T14:21:30.548951",
+    "creation_source": "agent"
+  },
+  "extract_stair_properties": {
+    "ifc_tool_name": "extract_stair_properties",
+    "description": "Extract all properties and attributes for a specific stair element from an IFC file, including both direct attributes and property set data",
+    "parameters": [
+      {
+        "name": "ifc_file_path",
+        "type": "str",
+        "description": "Path to the IFC file to be processed",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "stair_id",
+        "type": "str",
+        "description": "The unique ID (GlobalId) of the stair element to extract properties for",
+        "required": true,
+        "default": null
+      }
+    ],
+    "return_type": "Dict[str, Any]",
+    "category": "attributes",
+    "tags": [
+      "stair",
+      "properties",
+      "extraction",
+      "ifc",
+      "geometry",
+      "attributes"
+    ],
+    "file_path": "ifc_tools\\generated\\attributes\\extract_stair_properties.py",
+    "created_at": "2025-10-13T14:23:15.370082",
+    "creation_source": "agent"
+  },
+  "extract_stair_flights": {
+    "ifc_tool_name": "extract_stair_flights",
+    "description": "Extract all stair flight elements from an IFC file by filtering for IfcStairFlight entities",
+    "parameters": [
+      {
+        "name": "ifc_file_path",
+        "type": "str",
+        "description": "Path to the IFC file to process",
+        "required": true,
+        "default": null
+      }
+    ],
+    "return_type": "List[Dict[str, Any]]",
+    "category": "element_selection",
+    "tags": [
+      "stair",
+      "flight",
+      "extraction",
+      "ifcstairflight",
+      "geometry"
+    ],
+    "file_path": "ifc_tools\\generated\\element_selection\\extract_stair_flights.py",
+    "created_at": "2025-10-13T14:24:56.376774",
+    "creation_source": "agent"
+  },
+  "get_stair_attributes": {
+    "ifc_tool_name": "get_stair_attributes",
+    "description": "Extract basic attributes for a specific stair element identified by its GlobalId from an IFC file",
+    "parameters": [
+      {
+        "name": "ifc_file_path",
+        "type": "str",
+        "description": "Path to the IFC file",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "global_id",
+        "type": "str",
+        "description": "GlobalId of the stair element to extract attributes from",
+        "required": true,
+        "default": null
+      }
+    ],
+    "return_type": "Dict[str, Any]",
+    "category": "attributes",
+    "tags": [
+      "stair",
+      "attributes",
+      "properties",
+      "geometry",
+      "ifcopenshell"
+    ],
+    "file_path": "ifc_tools\\generated\\attributes\\get_stair_attributes.py",
+    "created_at": "2025-10-13T14:26:35.290983",
+    "creation_source": "agent"
+  },
+  "extract_stairflight_riser_height": {
+    "ifc_tool_name": "extract_stairflight_riser_height",
+    "description": "Extract riser height from IfcStairFlight property sets in IFC files",
+    "parameters": [
+      {
+        "name": "ifc_file_path",
+        "type": "str",
+        "description": "Path to the IFC file containing the stair flight elements",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "stairflight_id",
+        "type": "str",
+        "description": "Unique identifier (GlobalId) of the IfcStairFlight element",
+        "required": true,
+        "default": null
+      }
+    ],
+    "return_type": "float",
+    "category": "attributes",
+    "tags": [
+      "stair",
+      "stairflight",
+      "riser",
+      "height",
+      "property",
+      "extraction",
+      "geometry"
+    ],
+    "file_path": "ifc_tools\\generated\\attributes\\extract_stairflight_riser_height.py",
+    "created_at": "2025-10-13T15:13:05.646874",
+    "creation_source": "agent"
+  }
+}

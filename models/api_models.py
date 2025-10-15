@@ -4,7 +4,6 @@ Pydantic models for API requests and responses
 
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field, field_validator
-from .common_models import PlanModel
 
 
 class ComplianceCheckRequest(BaseModel):
