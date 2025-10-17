@@ -2,9 +2,6 @@
 
 Adaptive agent framework for automated building code compliance checking.
 
-![Python](https://img.shields.io/badge/python-3.11-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-
 ## Overview
 AdaptiveACC is a research prototype combining AI agents and BIM data to automate building code compliance checking. 
 The system interprets regulations, extracts IFC model data, and orchestrates tools for compliance verification. 
