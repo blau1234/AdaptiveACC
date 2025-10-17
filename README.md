@@ -1,5 +1,3 @@
-# AdaptiveACC
-
 Adaptive agent framework for automated building code compliance checking.
 
 ## Overview
@@ -13,11 +11,6 @@ It demonstrates the potential of integrating large language models with BIM for 
 - IFC model parsing using IfcOpenShell for geometry and property extraction.
 - FastAPI backend with ChromaDB vector store and Phoenix Tracing for debugging.
 - Interactive 3D visualization in browser using Three.js.
-- Scalable architecture designed for both project-scale and city-scale models.
-
-## Tech Stack
-- **AdaptiveACC:** Python · FastAPI · OpenAI · IfcOpenShell · ChromaDB · Phoenix Tracing · Pydantic · Three.js
-- **Urban Digital Twin:** Node.js · Express · MongoDB · Vue.js · Three.js · FME · Google Cloud
 
 ## Demo / Screenshots
 ![System Architecture](images/architecture.png)
