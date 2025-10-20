@@ -6,17 +6,21 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github)](https://github.com/blau1234/AdaptiveACC)
 
+
 ## Overview
 
 The ACC System transforms building code compliance checking from a manual, time-consuming process into an automated workflow powered by agentic AI. By leveraging Large Language Models (LLMs) with the ReAct (Reasoning + Acting) framework, the system autonomously interprets building regulations, explores IFC (Industry Foundation Classes) building models, and generates specialized tools on-demand to verify compliance.
 
 **Key Innovation**: Instead of requiring pre-programmed rules for every regulation, the system uses an autonomous agent that can reason about requirements, discover what data it needs, select or create custom analysis tools, and adapt its strategy based on findings - all without human intervention.
 
+---
+
 ## System Architecture
 
-![System Architecture](images/architecture.png)
+<img src="images/architecture.png" alt="System Architecture" width="80%">
 
 The system implements a **single-agent ReAct architecture** where one autonomous agent orchestrates the entire compliance checking workflow by dynamically selecting and invoking specialized tools. The agent maintains global state through a shared context and can create new tools on-demand when existing capabilities are insufficient.
+
 ### Compliance Agent
 Autonomous reasoning engine (`agents/compliance_agent.py`) that runs ReAct loops: Thought (analyze situation) → Action (select tool) → Observation (process result). Each iteration is logged in SharedContext for complete audit trail.
 
@@ -34,6 +38,8 @@ Autonomous reasoning engine (`agents/compliance_agent.py`) that runs ReAct loops
 - **SharedContext**: Global state management - stores session info, subgoals, agent history, search summaries, compliance results
 - **ToolRegistry**: Auto-discovery and schema generation for all tools
 - **VectorDatabase**: ChromaDB for semantic tool search
+
+---
 
 ## How It Works: Three-Phase Workflow
 
@@ -59,6 +65,7 @@ When no suitable tool exists, the agent creates one via `create_ifc_tool` → sa
 ### Phase 3: Result Generation
 When the agent stops calling tools, the system automatically generates a compliance report with pass/fail status, evidence from successful tool executions, list of violations, and recommendations.
 
+---
 
 ## Technical Stack
 
@@ -70,6 +77,8 @@ When the agent stops calling tools, the system automatically generates a complia
 | **Storage** | ChromaDB (vector database), File system (tool persistence) |
 | **Frontend** | Three.js (3D IFC visualization) |
 | **Observability** | Phoenix (Arize) for distributed tracing, custom execution logging |
+
+---
 
 ## Quick Start
 
