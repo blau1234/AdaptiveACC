@@ -17,7 +17,9 @@ The ACC System transforms building code compliance checking from a manual, time-
 
 ## System Architecture
 
-<img src="images/architecture.png" alt="System Architecture" width="80%">
+<p align="center">
+  <img src="images/architecture.png" alt="System Architecture" width="80%">
+</p>
 
 The system implements a **single-agent ReAct architecture** where one autonomous agent orchestrates the entire compliance checking workflow by dynamically selecting and invoking specialized tools. The agent maintains global state through a shared context and can create new tools on-demand when existing capabilities are insufficient.
 
